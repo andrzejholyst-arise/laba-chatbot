@@ -5,7 +5,7 @@ import { checkRateLimit } from "@vercel/firewall";
 let attempts = 0;
 let resetAt = 0;
 
-export async function limitLogin(): Promise<"allowed" | "limited" | "unavailable"> {
+export async function limitLogin(request: Request): Promise<"allowed" | "limited" | "unavailable"> {
   if (process.env.NODE_ENV !== "production") {
     if (Date.now() >= resetAt) {
       attempts = 0;
@@ -13,12 +13,14 @@ export async function limitLogin(): Promise<"allowed" | "limited" | "unavailable
     }
     return ++attempts > 10 ? "limited" : "allowed";
   }
-  if (process.env.VERCEL !== "1" || !process.env.VERCEL_URL) return "unavailable";
+  if (process.env.VERCEL !== "1") return "unavailable";
   try {
     const result = await checkRateLimit("workshop-login", {
-      headers: new Headers({ host: process.env.VERCEL_URL }),
+      // VERCEL_URL może wymagać Vercel Authentication nawet dla produkcji.
+      // SDK używa faktycznej domeny żądania i przekazuje cookie ochrony Vercel.
+      request,
       rateLimitKey: "workshop-login",
-      timeout: 2000,
+      timeout: 5000,
     });
     if (result.error === "not-found") return "unavailable";
     return result.rateLimited ? "limited" : "allowed";

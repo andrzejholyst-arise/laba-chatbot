@@ -43,7 +43,9 @@ limitu dla całego świata. Próg reguły można zmienić w panelu.
 
 Na Vercel ustaw te same cztery zmienne z `.env.example` w ustawieniach projektu
 (sekret wygeneruj odrębnie lokalnie lub przenieś prywatnie, nigdy przez rozmowę).
-Standardowe zmienne systemowe Vercel muszą być dostępne. Brak reguły, timeout
+Standardowe zmienne systemowe Vercel muszą być dostępne. Zapytanie do zapory
+używa domeny aktualnego żądania, a nie chronionego adresu `VERCEL_URL`.
+Brak reguły, timeout
 lub błąd zapory blokuje logowanie komunikatem 503. Inny hosting jest blokowany,
 dopóki nie zostanie dodany właściwy współdzielony limiter.
 W środowisku Preview zapora SDK może wymagać konfiguracji Protection Bypass

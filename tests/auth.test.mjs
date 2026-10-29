@@ -128,17 +128,21 @@ test("Ochrona czatu i logowania — bez .env i bez wywołań modelu", async (t) 
     process.env.VERCEL = "";
     process.env.VERCEL_URL = "";
     assert.ok(session.authConfigurationError());
-    assert.equal(await limitLogin(), "unavailable");
+    assert.equal(await limitLogin(req("/api/login", {})), "unavailable");
     process.env.VERCEL = "1";
     process.env.VERCEL_URL = "test.vercel.app";
     assert.match(session.sessionCookie(session.createSession()), /^__Host-chat-session=.*; Secure$/);
     assert.match(session.sessionCookie("", true), /Max-Age=0; Secure$/);
-    assert.equal(await limitLogin(), "unavailable");
+    assert.equal(await limitLogin(req("/api/login", {})), "unavailable");
     t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 404 }));
     assert.equal((await login.POST(req("/api/login", { password: "warsztat-test-only" }))).status, 503);
     t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 429 }));
     assert.equal((await login.POST(req("/api/login", { password: "warsztat-test-only" }))).status, 429);
-    t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 204 }));
+    t.mock.method(globalThis, "fetch", async (url) => {
+      assert.equal(new URL(url).host, "localhost");
+      assert.ok(!url.includes(process.env.VERCEL_URL));
+      return new Response(null, { status: 204 });
+    });
     const good = await login.POST(req("/api/login", { password: "warsztat-test-only" }, undefined, "https://localhost"));
     assert.equal(good.status, 204);
     assert.match(good.headers.get("set-cookie"), /; Secure$/);

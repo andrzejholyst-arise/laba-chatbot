@@ -6,7 +6,7 @@ export async function POST(request: Request) {
   if (!sameOrigin(request)) return new Response("Niedozwolone źródło żądania.", { status: 403, headers });
   const error = authConfigurationError();
   if (error) return new Response(error, { status: 503, headers });
-  const limit = await limitLogin();
+  const limit = await limitLogin(request);
   if (limit === "unavailable") return new Response("Logowanie zablokowane: limit prób na hostingu jest niedostępny lub nieskonfigurowany.", { status: 503, headers });
   if (limit === "limited") return new Response("Za dużo prób. Odczekaj minutę i spróbuj ponownie.", { status: 429, headers: { ...headers, "Retry-After": "60" } });
   // Nie przyjmujemy nieograniczonego body ani wielkich haseł.

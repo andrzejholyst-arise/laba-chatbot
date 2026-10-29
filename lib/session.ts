@@ -7,7 +7,7 @@ export function authConfigurationError(): string | null {
   if (!process.env.CHAT_PASSWORD || Buffer.byteLength(process.env.SESSION_SECRET ?? "") < 32) {
     return "Brak konfiguracji ochrony. Ustaw CHAT_PASSWORD oraz SESSION_SECRET (minimum 32 bajty) w .env.local i uruchom ponownie serwer.";
   }
-  if (process.env.NODE_ENV === "production" && (!process.env.VERCEL_URL || process.env.VERCEL !== "1")) {
+  if (process.env.NODE_ENV === "production" && process.env.VERCEL !== "1") {
     return "Logowanie zablokowane: ten hosting wymaga współdzielonego limitu prób. Obecnie obsługujemy Vercel Firewall.";
   }
   return null;
