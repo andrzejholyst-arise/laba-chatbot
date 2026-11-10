@@ -28,6 +28,10 @@
   gap: 8px;
 }
 
+.composer[hidden] {
+  display: none;
+}
+
 .controls {
   display: flex;
   gap: 12px;
@@ -79,4 +83,155 @@
 .controls button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.controls {
+  flex-wrap: wrap;
+}
+
+.controls button[aria-pressed="false"] {
+  background: #e2e8f0;
+  color: #172033;
+}
+
+.composer textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px;
+  border: 1px solid #94a3b8;
+  border-radius: 8px;
+  background: #fff;
+  color: #172033;
+  font: inherit;
+  resize: vertical;
+}
+
+.composer textarea:focus-visible {
+  outline: 3px solid #6484f5;
+  outline-offset: 3px;
+}
+
+.analysisResult {
+  padding: 20px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #fff;
+  overflow-wrap: anywhere;
+}
+
+.analysisResult dt {
+  font-weight: bold;
+}
+
+.analysisResult dd {
+  margin: 6px 0 16px;
+}
+
+.analysisResult p {
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.toolBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.toolBadges span {
+  padding: 4px 8px;
+  border-radius: 12px;
+  background: #e8eefb;
+  color: #24417c;
+}
+
+.photoThumbnail {
+  display: block;
+  max-width: min(100%, 180px);
+  max-height: 180px;
+  border-radius: 8px;
+  object-fit: contain;
+  margin-top: 8px;
+}
+
+.generatedImage {
+  display: block;
+  max-width: 100%;
+  max-height: 560px;
+  object-fit: contain;
+  border-radius: 8px;
+  margin-top: 8px;
+}
+
+.modelCaption {
+  display: block;
+  margin-top: 8px;
+  color: #475569;
+  overflow-wrap: anywhere;
+}
+
+.imageSuggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.imageSuggestions button {
+  border: 1px solid #cbd5e1;
+  border-radius: 16px;
+  padding: 7px 12px;
+  background: #f1f5f9;
+  color: #24417c;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.imageSuggestions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.downloadImage {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 8px 14px;
+  border: 1px solid #94a3b8;
+  border-radius: 8px;
+  color: #24417c;
+  background: #f1f5f9;
+  text-decoration: none;
+}
+
+.imageSuggestions button:focus-visible,
+.downloadImage:focus-visible {
+  outline: 3px solid #6484f5;
+  outline-offset: 3px;
+}
+
+.composer select {
+  max-width: 100%;
+  padding: 10px;
+  font: inherit;
+  background: white;
+  color: #172033;
+}
+
+.analysisResult pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .comparison {
+    grid-template-columns: 1fr;
+  }
 }

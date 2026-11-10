@@ -1,0 +1,34 @@
+{
+  "type": "object",
+  "properties": {
+    "category": {
+      "type": "string",
+      "enum": [
+        "sales",
+        "support",
+        "billing",
+        "unknown"
+      ]
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "high"
+      ]
+    },
+    "draft": {
+      "type": "string"
+    },
+    "needs_review": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "category",
+    "priority",
+    "draft",
+    "needs_review"
+  ],
+  "additionalProperties": false
+}

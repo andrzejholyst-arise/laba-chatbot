@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import { authConfigurationError, cookieName, validSession } from "../lib/session";
 import Chat from "./chat";
 import Login from "./login";
+import { loadDemoCases } from "../lib/demo-cases";
 
 async function ProtectedChat() {
   // Sprawdzanie ważności sesji wymaga aktualnego czasu dla tego żądania.
@@ -13,7 +14,9 @@ async function ProtectedChat() {
   if (error || !validSession(cookieStore.get(cookieName())?.value)) {
     return <Login configurationError={error} />;
   }
-  return <Chat />;
+  // Brak materiałów nie powinien blokować zwykłego czatu.
+  const demoCases = await loadDemoCases().catch(() => []);
+  return <Chat demoCases={demoCases} />;
 }
 
 export default function Home() {

@@ -1,0 +1,26 @@
+[
+  {
+    "category": "sales",
+    "priority": "normal",
+    "needs_review": false
+  },
+  {
+    "category": "sales",
+    "priority": "normal",
+    "draft": "Test",
+    "needs_review": "false"
+  },
+  {
+    "category": "marketing",
+    "priority": "normal",
+    "draft": "Test",
+    "needs_review": false
+  },
+  {
+    "category": "sales",
+    "priority": "normal",
+    "draft": "Test",
+    "needs_review": false,
+    "send_now": true
+  }
+]

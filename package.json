@@ -9,7 +9,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test:auth": "node --test tests/auth.test.mjs"
+    "test:auth": "node --test tests/auth.test.mjs",
+    "test:analysis": "node --test tests/analysis.test.mjs",
+    "test:images": "node --test tests/images.test.mjs",
+    "test:speech": "node --test tests/speech.test.mjs"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.161",
@@ -19,6 +22,7 @@
     "next": "16.4.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "sharp": "0.35.5",
     "zod": "4.6.7"
   },
   "devDependencies": {
