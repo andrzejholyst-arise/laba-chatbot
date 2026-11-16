@@ -14,7 +14,7 @@ z dostawcą. Nieznany lub brakujący `mode` i dodatkowe pola uprawnień dają 40
 
 - `mode: "chat"`: `messages` w formacie UIMessage, streaming `streamText`,
   źródła i narzędzia `webSearch`, `aktualnyCzas`, `opadyDlaOgrodnika`,
-  `generujObraz`; limit `stopWhen: isStepCount(5)`.
+  `generujObraz`; limit `stopWhen: isStepCount(6)`.
 - `mode: "analyze"`: `message` i opcjonalny `variant` A/B; `generateText`
   z `Output.object`, ścisła walidacja schematu i odpowiedź JSON, bez narzędzi.
 
@@ -42,7 +42,7 @@ i obrazów usunięto dopiero po testach nowego handlera i poprawnym buildzie.
 Logowanie i wylogowanie zachowały własne endpointy.
 
 Testy: `npm run test:auth`, `npm run test:analysis`, `npm run test:images`.
-Sprawdzają m.in. pierwszeństwo sesji, ścisłe `mode`, limit pięciu kroków,
+Sprawdzają m.in. pierwszeństwo sesji, ścisłe `mode`, limit sześciu kroków,
 wszystkie narzędzia, Vision i to, że base64 jest w streamie UI, ale nie
 w następnym wywołaniu modelu ani żądaniu z historią. Używają wyłącznie atrap.
 
@@ -52,6 +52,14 @@ oraz „Analiza JSON”. W Network wszystkie te wywołania powinny trafiać do
 `/api/agent` z odpowiednim trybem. Pierwsze prawdziwe wywołania wykonaj samodzielnie.
 
 ## Konfiguracja lokalna
+
+Limit kroków modelu ustaw w `.env.local` jako `AGENT_MAX_STEPS=6`.
+To maksymalna liczba kroków na jedno zadanie, łącznie z odpowiedzią końcową.
+Wpisz dodatnią liczbę całkowitą; brak lub błędna wartość daje domyślnie 6.
+Po zmianie uruchom ponownie serwer. Na Vercel ustaw tę zmienną w konfiguracji
+projektu i wykonaj nowe wdrożenie. Nadal obowiązują osobne limity 16 wywołań
+narzędzi oraz 60 sekund na zadanie. Diagnostyka i komunikat zatrzymania
+pokazują skonfigurowany limit.
 
 ### Hasło warsztatowe i sesja
 
@@ -182,7 +190,7 @@ w OpenRouter. Ewentualną zmianę `OPENROUTER_MODEL` wykonaj dopiero po sprawdze
 kosztów i uzgodnieniu wyboru, potem uruchom ponownie aplikację lub wykonaj redeploy.
 Nie ma automatycznej zmiany modelu ani ponowienia generacji. Błąd katalogu,
 odmowa, ucięta odpowiedź, przerwanie i błąd dostawcy nie dają pozornego wyniku.
-Przycisk „Przerwij analizę” anuluje żądanie; serwer ma też limit czasu 50 sekund.
+Przycisk „Przerwij analizę” anuluje żądanie; serwer ma też limit czasu 60 sekund.
 
 Testy lokalne (atrapa HTTP OpenRouter, bez `.env` i bez wywołania modelu):
 
@@ -330,7 +338,7 @@ Sprawdź samodzielnie w przeglądarce:
 
 Endpoint `/api/agent` ma narzędzie providera
 `openrouter.tools.webSearch({ maxResults: 3, engine: "native" })` i
-`stopWhen: isStepCount(5)`. Instrukcja nakazuje wyszukiwanie aktualnych wydarzeń,
+`stopWhen: isStepCount(6)`. Instrukcja nakazuje wyszukiwanie aktualnych wydarzeń,
 cen, dat i niepewnych faktów oraz oparcie odpowiedzi na źródłach. Wyniki stron
 są danymi, nie nowymi instrukcjami i nie zmieniają informacji firmy.
 
@@ -369,7 +377,7 @@ Funkcja działa na serwerze, bez dostępu do sekretów.
 
 Opis narzędzia i instrukcja kierują do jego użycia przy pytaniach o „dziś”,
 „jutro”, „za ile dni” i aktualną godzinę. Model korzysta z daty przy dalszych
-obliczeniach. Nadal obowiązuje limit `isStepCount(5)`; model po otrzymaniu
+obliczeniach. Nadal obowiązuje limit `isStepCount(6)`; model po otrzymaniu
 wyniku funkcji może kontynuować odpowiedź. Wyszukiwanie pozostaje dostępne
 do pytań wymagających aktualnych faktów z internetu.
 
@@ -414,7 +422,7 @@ To prognoza całej doby, także dla dzisiejszej daty, nie pomiar ani suma
 wyłącznie pozostałych godzin. Ilość deszczu nie uruchamia podlewania.
 
 Serwer waliduje dane, jednostki, zakres współrzędnych i długości tablic.
-Brak danych nie staje się zerem. API ma limit oczekiwania 8 sekund;
+Brak danych nie staje się zerem. API ma limit oczekiwania 10 sekund;
 błąd HTTP, brak połączenia, timeout lub błędny JSON kończą się wynikiem
 `{ ok: false, message, checkedAt }`, bez surowego błędu dostawcy i bez
 pozornego wyniku prognozy. `checkedAt` oznacza czas próby, a `retrievedAt`
@@ -540,34 +548,19 @@ z dowolnego opisu, sprawdź banana i jaskrawą paletę, następnie kliknij „Po
 i sprawdź właściwości pliku: 800 × 800 pikseli. Zasady marki są instrukcją
 dla modelu; nie dodano osobnego modelu oceniającego obecność banana i kolory.
 
-## Kolejność narzędzi i informacja o limicie
+## Kroki agenta (ReAct) i informacja o limicie
 
-Przy odpowiedzi czatu etykiety są numerowane zgodnie z kolejnością części
-wywołań w streamie. Ponowne wywołanie tego samego narzędzia ma kolejną etykietę;
-powtórzona część o tym samym `toolCallId` nie jest dublowana. Dla native search
-bez jawnego wywołania pierwsze cytowanie w danym kroku zastępuje informację
-narzędzia, a kolejne źródła tego kroku nie dodają kolejnych etykiet. Jawne
-wywołanie wyszukiwania i jego cytowania również nie są liczone podwójnie.
-Bez użycia narzędzia i bez źródeł odpowiedź nie ma etykiet.
+`stopWhen: isStepCount(AGENT_STEP_LIMIT)` ogranicza zadanie do sześciu generacji modelu; `AGENT_STEP_LIMIT=6` jest też używany przez diagnostykę i interfejs. Ponowienia wywołania i streamu są wyłączone (`maxRetries: 0`, `streamRetries: 0`). Nie ma dodatkowego wywołania modelu w celu sporządzenia podsumowania.
 
-Warunek zatrzymania nadal bazuje na `isStepCount(5)`. Serwer rejestruje,
-czy właśnie ten warunek zatrzymał możliwy następny krok, i przesyła
-`stepLimitReached` oraz `stepsCompleted` w metadanych końca streamu.
-UI wtedy pokazuje dokładnie „Przerwałem po 5 krokach”, także gdy model
-nie zdążył podać żadnego tekstu. Dotychczasowy tekst i obrazy zostają widoczne.
-Naturalne ukończenie odpowiedzi w piątym kroku nie jest oznaczane jako
-przerwanie. Błędy dostawcy i anulowanie nie są zamieniane na ten komunikat.
+Instrukcja: przy zadaniu złożonym pracuj krok po kroku — użyj narzędzia, przeczytaj wynik i dopiero wtedy zdecyduj o następnym kroku; nie zgaduj danych, które można sprawdzić. Narzędzia zależne od wcześniejszych wyników powinny być wywoływane w następnej generacji. Limit obejmuje odpowiedź końcową; agent może zakończyć wcześniej. Prywatny tok rozumowania nie jest przekazywany do interfejsu.
 
-Instrukcja agenta mówi: przy zadaniu złożonym najpierw zbierz informacje,
-potem twórz — ustal braki i skorzystaj z narzędzi informacyjnych przed
-przygotowaniem odpowiedzi lub wygenerowaniem obrazu.
+Nad odpowiedzią lista pokazuje faktyczne numery kroków modelu (części `step-start`) i użyte narzędzia, np. „1. pogoda → 2. waluty → 3. kalkulator”. Kilka wywołań w jednym kroku ma wspólny numer i jest połączone znakiem „+”; krok bez narzędzia zajmuje numer, ale nie dodaje pustej etykiety. Ponowne wywołanie tego samego narzędzia w następnym kroku pojawia się ponownie. Ten sam `toolCallId` nie jest dublowany. Cytowania native search zastępują informację o wyszukiwaniu tylko wtedy, gdy krok nie ma jawnego wywołania wyszukiwania. Zwykła odpowiedź tekstowa nie dostaje fikcyjnej listy kroków.
 
-`npm run test:auth` sprawdza kolejność, powtórzenia, źródła native,
-wymuszone zatrzymanie po pięciu odczytach czasu i naturalne zakończenie
-w piątym kroku. Testy używają lokalnego providera-atrapy, bez wywołań modelu.
-W przeglądarce sprawdź złożoną prośbę o zebranie informacji, a potem utworzenie
-obrazu; etykiety powinny odzwierciedlać rzeczywiste wywołania. Przy wyczerpaniu
-budżetu kroków komunikat zastąpi brak końcowej odpowiedzi.
+Jeżeli po szóstym kroku z wynikami lokalnych narzędzi potrzebna byłaby dalsza generacja, UI pokazuje dokładnie „Zatrzymałem się po 6 krokach” oraz „Dotychczasowe wyniki”. Serwer zbiera zwięzłe, wybrane dane narzędzi w `onStepEnd` i przekazuje je jako `partialFindings` w metadanych końca streamu. Podsumowanie obejmuje maksymalnie 24 różne wpisy po 800 znaków; nie serializuje obrazów, audio, nieznanych pól ani wartości sekretów. Błędy są oznaczone jako błędy. Przy braku potwierdzonych wyników interfejs mówi o tym wprost. Wcześniej uzyskany tekst, obrazy, nagrania i źródła pozostają widoczne. Naturalna odpowiedź kończąca zadanie w szóstym kroku oraz błąd dostawcy lub anulowanie nie dostają fałszywego komunikatu o wyczerpaniu limitu.
+
+Testy lokalne: `npm run test:agent` i `npm run test:auth` — sekwencja wykorzystująca poprzedni wynik, brak siódmej generacji, podsumowanie, same błędy, wcześniejsze i naturalne zakończenie, grupowanie narzędzi, powtórzenia i źródła. Bez wywoływania prawdziwego modelu.
+
+W przeglądarce poproś np.: „Sprawdź pogodę na jutro w Krakowie, kurs 100 EUR na PLN i pomnóż przeliczoną kwotę przez trzy”. Sprawdź numery kroków i to, że kalkulator otrzyma wynik przeliczenia z poprzedniego kroku. Liczba kroków może być mniejsza niż sześć — niezależne narzędzia mogą być wywołane razem. Zadanie wymagające więcej kroków powinno skończyć się komunikatem i częściowymi wynikami.
 
 ## Kalkulator kosztu pojedynczych konsultacji
 
@@ -640,10 +633,124 @@ Domyślny model głosowy: `elevenlabs/eleven-flash-v2.5`, żeński głos `sarah`
 
 Konfiguracja w `.env.example`: `OPENROUTER_IMAGE_MODEL` wybiera model obrazów, `OPENROUTER_SPEECH_MODEL` model TTS, a `OPENROUTER_SPEECH_VOICE` głos zgodny z modelem. Brak lub pusta wartość używa dotychczasowych ustawień domyślnych. Ustaw te zmienne w swoim `.env.local` lub w Vercel, po czym uruchom aplikację ponownie albo wykonaj nowe wdrożenie. TTS musi obsługiwać polski, MP3 i API mowy OpenRouter. Błędna konfiguracja daje czytelny komunikat; aplikacja nie wybiera samodzielnie innego modelu. Nie używaj prefiksu `NEXT_PUBLIC_`.
 
-Tekst nagrania ma limit 2000 znaków, plik 4 MB, oczekiwanie 30 sekund. Dozwolone jedno nagranie na żądanie. Narzędzie zwraca plik do przeglądarki, a do modelu wyłącznie krótkie potwierdzenie albo błąd. Pliki audio nie są ponownie przesyłane w historii. Odtwarzacz nie włącza się automatycznie; obok są pobieranie MP3 i tekst nagrania. Błędy uprawnień, środków, dostawcy i niepoprawne nagranie są pokazywane po polsku.
+Tekst nagrania ma limit 2000 znaków, plik 4 MB, oczekiwanie 10 sekund. Dozwolone jedno nagranie na żądanie. Narzędzie zwraca plik do przeglądarki, a do modelu wyłącznie krótkie potwierdzenie albo błąd. Pliki audio nie są ponownie przesyłane w historii. Odtwarzacz nie włącza się automatycznie; obok są pobieranie MP3 i tekst nagrania. Błędy uprawnień, środków, dostawcy i niepoprawne nagranie są pokazywane po polsku.
 
 Test ręczny: wpisz „Ile kosztują trzy pojedyncze konsultacje?” i kliknij „Wyślij” — oczekiwane 450 zł i etykieta kalkulatora. Powtórz z dopiskiem „odpowiedz głosem po polsku” i kliknij zwykłe „Wyślij” albo użyj przycisku „Odpowiedz głosem” — oczekiwany odtwarzacz, etykieta głosu, transkrypcja i pobieranie. Następne zwykłe „Wyślij” znowu zwraca tylko tekst. Podczas pracy przyciski są zablokowane. Pierwszą prawdziwą generację wykonuje użytkownik.
 
 Testy lokalne bez dostawcy: `npm run test:speech` (format, błędy, sesja, tryb tekstowy, przesyłanie nagrania w streamie, brak pliku w kontekście modelu).
 
 Źródła API: [OpenRouter — ElevenLabs i API mowy](https://openrouter.ai/blog/announcements/elevenlabs-on-openrouter/), [ElevenLabs — obsługiwane języki](https://elevenlabs.io/docs/overview/capabilities/text-to-speech), [żeńskie głosy, w tym Sarah](https://elevenlabs.io/docs/help-center/product/voices/voice-library/what-voices-are-popular-on-tik-tok-you-tube-and-social-media).
+
+## Osiem narzędzi warsztatowych
+
+W `lib/workshop-tools.ts` agent dostaje `pogoda`, `waluty`, `swieta`, `wikipedia`, `kalkulator`, `czas`, `notatki` i `diagnostyka`. Dotychczasowe narzędzia nadal działają: wyszukiwanie, generowanie obrazu, głos, prognoza opadów dla ogrodu, kalkulator konsultacji oraz zgodny wstecz alias `aktualnyCzas` (Warszawa). `czas` korzysta z tej samej funkcji formatującej i dodatkowo obsługuje strefę. Nazwy etykiet oraz wspólny limit 6 kroków są w `lib/tool-catalog.ts`. Nie dodano endpointów ani bibliotek; `/api/agent` wciąż sprawdza sesję przed czytaniem body i wywołaniem modelu.
+
+| Narzędzie | Wejście i wynik | Dane i dokumentacja |
+|---|---|---|
+| `pogoda` | `miasto`, `data` RRRR-MM-DD, opcjonalnie `kraj` ISO alpha-2 i `region`; temperatura min/max °C, suma opadów mm, kod WMO, miejscowość i strefa | [Geokodowanie Open-Meteo](https://open-meteo.com/en/docs/geocoding-api), [prognoza](https://open-meteo.com/en/docs): `/v1/search`, następnie `/v1/forecast` z `daily`, `start_date`, `end_date`, strefą miasta |
+| `waluty` | `waluta` ISO 4217, opcjonalnie `kwota` (domyślnie 1) i `kierunek`: `na_PLN` lub `z_PLN`; kurs 1 jednostki, data publikacji i wynik zaokrąglony do 2 miejsc | [API NBP](https://api.nbp.pl/): `/api/exchangerates/rates/a/{code}/?format=json`, tabela B po 404 z A; `code`, `rates[].mid`, `effectiveDate` |
+| `swieta` | `kraj` ISO alpha-2, `rok` 1970–2100; lista świąt publicznych, dat, nazw i zakresów regionalnych | [Nager.Date](https://github.com/nager/Nager.Date): `https://date.nager.at/api/v3/PublicHolidays/{year}/{countryCode}`, pola `date`, `localName`, `countryCode`, `global`, `counties`, `types`; filtr `Public` |
+| `wikipedia` | `haslo`; krótki tekst wprowadzający i klikalny link do polskiego artykułu | [MediaWiki Query](https://www.mediawiki.org/wiki/API:Query), [TextExtracts](https://www.mediawiki.org/wiki/Special:ApiHelp/query%2Bextracts): `https://pl.wikipedia.org/w/api.php?action=query`, `extracts|info|pageprops`, `exintro`, `explaintext`, `exchars`, `inprop=url`, `redirects`, `formatversion=2` |
+| `kalkulator` | `dzialanie`: `dodaj`, `odejmij`, `pomnoz`, `podziel`, `potega`; osobne liczby `a`, `b` od −1e12 do 1e12 | Lokalny kod serwera, bez `eval`, wykonywania kodu lub interpretera wyrażeń. Liczby IEEE 754, wynik ograniczony bezpiecznym zakresem; cena konsultacji nadal przez firmowy kalkulator |
+| `czas` | Opcjonalna `strefa`, np. `Europe/Warsaw`, `Asia/Tokyo`, `UTC`; data, dzień tygodnia i godzina, domyślnie Warszawa | Zegar serwera i [Intl.DateTimeFormat](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/DateTimeFormat/DateTimeFormat), walidacja strefy i obsługa czasu letniego |
+| `notatki` | `operacja=zapisz` i `tresc` 1–1000 znaków lub samo `operacja=pokaz` | Mapa w pamięci procesu serwera, oddzielona hashem zweryfikowanego cookie sesji; model i przeglądarka nie wybierają zakresu |
+| `diagnostyka` | Bez argumentów; skonfigurowany identyfikator modelu, faktyczna lista narzędzi, limit kroków i flagi `tak`/`nie` dla wymaganych zmiennych | Jawna lista: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `CHAT_PASSWORD`, `SESSION_SECRET`. Brak wartości sekretów, cookies i instrukcji systemowej. Identyfikator modelu to konfiguracja, nie potwierdzenie modelu faktycznie wybranego przez routing dostawcy |
+
+Nowe narzędzia zwracają `retrievedAt` jako pełną datę i godzinę UTC ISO 8601. Źródła z API pojawiają się w czacie z własnym czasem pobrania (wyświetlanym w strefie Warszawy), a wywołania mają etykiety w kolejności wykonania. Narzędzia zwracają tylko wybrane pola. Przy błędzie zwracają `ok=false`, polski komunikat i godzinę sprawdzenia, bez częściowego wyniku udającego sukces.
+
+Wspólny klient `lib/public-api.ts` dopuszcza wyłącznie ustalone hosty HTTPS, blokuje przekierowania, nie przekazuje kluczy OpenRouter ani cookies do publicznych API, ma limit 10 sekund i 512 kB na zapytanie. Odpowiedzi przechodzą walidację Zod. Pogoda nie zgaduje miasta przy wielu wynikach i obejmuje dziś oraz następne 15 dni w strefie miasta. Kurs NBP jest ostatnim opublikowanym kursem średnim, a nie gwarantowanym kursem dzisiejszym czy kursem transakcji. Święta regionalne nie są oznaczane jako wolne w całym kraju. Wieloznaczne hasło Wikipedii wymaga doprecyzowania. Zewnętrzna treść i notatki pozostają danymi, nie instrukcjami.
+
+Notatki: maksymalnie 50 na sesję i 1000 aktywnych sesji w pamięci; wygasają z sesją. Nie są trwałe i nie są współdzielone między instancjami Vercel. Restart, skalowanie lub kolejne logowanie może oznaczać pustą listę. Bez bazy danych nie należy używać ich do przechowywania ważnych informacji. Nie dodano wysyłania wiadomości, płatności ani rezerwacji.
+
+Testy offline: `npm run test:tools`. Obejmują schematy i dodatkowe pola, błędne daty, brak/wieloznaczność miasta, tabelę B NBP, kierunki przeliczeń, regionalność świąt, brak i wieloznaczność artykułu, błędy/timeout/uszkodzony JSON/niekompletną i za dużą odpowiedź, kalkulator, strefy, izolację i limity notatek, diagnostykę bez sekretów, wszystkie etykiety i pełne function calling każdego nowego narzędzia przez `/api/agent` z atrapą modelu. Prawdziwe wywołania modelu wykonuje użytkownik.
+
+Przykłady do ręcznego sprawdzenia w przeglądarce:
+
+- „Jaka pogoda będzie jutro w Krakowie, Polska, województwo małopolskie?” — czas, potem prognoza i źródło.
+- „Przelicz 100 EUR na PLN według NBP. Podaj datę kursu.”
+- „Jakie święta publiczne wypadają w Polsce w 2027 roku?”
+- „Sprawdź hasło Banan w polskiej Wikipedii i podaj link.”
+- „Oblicz 123,5 razy 8.” oraz „Podziel 10 przez zero.”
+- „Która godzina jest teraz w Tokio?”
+- „Zapisz notatkę: podlać bananowca.”, potem „Pokaż moje notatki.” — nowa sesja nie widzi poprzednich.
+- „Uruchom diagnostykę: jaki model, narzędzia i limit kroków są ustawione?” — wyłącznie nazwa modelu oraz flagi tak/nie dla zmiennych.
+
+## Długość dnia dla roślin — `dlugoscDnia`
+
+Narzędzie w `lib/daylight.ts`, podłączone w `lib/workshop-tools.ts`, pobiera z Open-Meteo godziny wschodu i zachodu słońca oraz długość dnia. Przyjmuje `miasto`, `data` RRRR-MM-DD oraz opcjonalnie `kraj` (ISO alpha-2) i `region`. Geokodowanie jest wspólne z pogodą (`lib/geocoding.ts`): dopasowuje dokładną nazwę, obsługuje krótkie nazwy województw i prosi o doprecyzowanie przy kilku pasujących miejscach.
+
+Zakres dat: dzisiaj i kolejne 15 dni w strefie wybranego miasta. Dla innych dat zwraca czytelny komunikat zamiast zgadywać. To długość dnia astronomicznego, nie prognoza słonecznej pogody ani ilość światła docierająca do rośliny w mieszkaniu.
+
+Zapytanie zgodnie z [dokumentacją Open-Meteo](https://open-meteo.com/en/docs): `GET https://api.open-meteo.com/v1/forecast` z `daily=sunrise,sunset,daylight_duration`, `start_date`, `end_date`, strefą miasta i `timeformat=unixtime`. Odpowiedź ma `daily.time`, `sunrise`, `sunset` jako znaczniki Unix i `daylight_duration` w sekundach. Zegar lokalny jest formatowany przez `Intl` ze strefą IANA, z uwzględnieniem czasu letniego. Wynik zawiera tylko miejsce, datę, strefę, godziny lokalne, długość dnia w sekundach i w formie godzin/minut (zaokrąglenie do minuty), krótką uwagę, źródło oraz `retrievedAt`. Dla nocy/dnia polarnego godziny są `null`, a uwaga wyjaśnia brak zdarzenia; placeholder północy z API nie jest przedstawiany jako wschód/zachód.
+
+Działa bez dodatkowego klucza. Używa dotychczasowego klienta HTTP (limit czasu i rozmiaru odpowiedzi, dozwolone hosty), walidacji wejść i odpowiedzi Zod oraz sesji `/api/agent`. Ma etykietę „🌅 długość dnia” i klikalne źródło z czasem pobrania. Pozostałe narzędzia i limit 6 kroków pozostają dostępne.
+
+Test lokalny bez modelu: `npm run test:daylight`. Sprawdza schemat, brak/wieloznaczność miasta, zakres dat, prawidłowe parametry i jednostki, zmianę czasu, warunki polarne, niespójne dane, błędy i przerwanie API, sesję, pełne function calling przez atrapę OpenRouter, etykietę i źródło. Regresję pogody pokrywa `npm run test:tools`.
+
+W przeglądarce wpisz: „Sprawdź długość dnia oraz wschód i zachód słońca jutro w Krakowie, Polska, województwo małopolskie”. Oczekiwane: czas dla ustalenia daty, narzędzie długości dnia, lokalne godziny ze strefą i źródło Open-Meteo z datą pobrania. Następnie podaj nieistniejące miasto lub datę poza zakresem — agent powinien pokazać komunikat, bez fikcyjnych godzin.
+
+
+## Budżet zadania i zakończenie po błędzie
+
+Wspólne stałe w `lib/tool-catalog.ts`: 6 kroków modelu, najwyżej 16 rozpoczętych wykonań narzędzi, 60 sekund całego zadania i 10 sekund pojedynczego narzędzia. `lib/task-budget.ts` tworzy odrębny budżet dla każdego uwierzytelnionego żądania, jeszcze przed odczytem body. `stopWhen` łączy `isStepCount(6)` z zatrzymaniem po wyczerpaniu budżetu lub błędzie. Model nie może zmienić limitów polami z przeglądarki. Ponowienia modelu są wyłączone.
+
+Liczba kroków oznacza rozpoczęte generacje modelu; liczba narzędzi oznacza rzeczywiście rozpoczęte wykonania, nie liczbę kroków. Kilka narzędzi w jednym kroku liczy się oddzielnie. Wywołania zablokowane przed wykonaniem nie zwiększają licznika, nie wykonują API ani zapisu i nie pojawiają się jako użyte narzędzia. Narzędzia wykonują się kolejno (`toolCallConcurrency: 1`). Po pierwszym `ok=false`, wyjątku, błędzie argumentów lub timeout nie uruchamiamy następnej generacji ani kolejnych narzędzi z kolejki. Użytkownik widzi, czego nie udało się sprawdzić, i wcześniejsze potwierdzone wyniki. Może sam rozpocząć nowe zadanie; agent nie ponawia nieudanego wywołania automatycznie.
+
+Każde narzędzie ma własny abort i wyścig z timerem 10 s, obejmujący także kilka zapytań API (np. geokodowanie i prognozę) oraz odbiór całego body. Po przekroczeniu zwraca dokładny komunikat „źródło nie odpowiada”. Dotyczy także generowania obrazu i głosu; wolniejsza generacja nie jest automatycznie ponawiana. Dodatkowo klienty publicznych API, obrazu i głosu mają własne timeouty 10 s. Globalny timer i abort kończą zadanie najpóźniej po 60 s nawet wtedy, gdy promise dostawcy nie reaguje na sygnał. Limit wykonania funkcji hostingu wynosi 65 s wyłącznie dla domknięcia streamu z wynikiem i metadanymi; nie wydłuża pracy modelu ani narzędzi ponad 60 s. Przycisk generowania obrazu korzysta ze wspólnego czasu zadania zamiast wcześniejszego timera 55 s.
+
+Native search jest wykonywany wewnątrz OpenRouter. Provider 3.1.0 nie udostępnia osobnego początku wyszukiwania ani liczby wewnętrznych zapytań Google. Liczymy jedną obserwowalną operację wyszukiwania na krok (na podstawie cytowań lub jawnego wywołania), bez dublowania za kolejne źródła. Przed generacją z włączonym native search rezerwujemy jeden slot budżetu, aby późno przesłane cytowania nie przekroczyły 16 wykonań łącznie z narzędziami lokalnymi. W skrajnym przypadku zadanie może zakończyć się przy 15 narzędziach lokalnych i niewykorzystanej rezerwacji; interfejs nadal pokazuje faktycznie obserwowaną liczbę. To limit operacji aplikacji, nie niewidocznych zapytań wewnętrznych dostawcy. Ponieważ wyszukiwanie stanowi część żądania modelu, całe żądanie z włączonym native search (również zwykła odpowiedź takiego kroku) ma konserwatywny limit 10 s, łącznie ze streamem.
+
+Zewnętrzny stream UI jest domykany także po przerwaniu lub awarii providera. Nie wykonuje dodatkowego wywołania modelu na podsumowanie. Metadane zawierają przyczynę zatrzymania, błędy, wybrane potwierdzone wyniki oraz `modelSteps`, `toolCalls` i `durationMs`. Czas jest mierzony monotonicznie przez `performance.now()`, od weryfikacji sesji i startu zadania do końca streamu. Pod każdą odpowiedzią jest „Kroki: … · Wywołania narzędzi: … · Czas: … s”. Diagnostyka pokazuje aktualne limity; sekrety nadal wyłącznie jako tak/nie.
+
+Testy: `npm run test:budget` sprawdza granice 16/17 wywołań, reset budżetu w nowym zadaniu, rezerwację native, zegary 10/60 s, API ignorujące abort, grupę narzędzi z błędem i blokadę późniejszego zapisu, brak ponowienia, awarię dostawcy po częściowym wyniku i statystyki. Dane i zegary są lokalne, model nie jest wywoływany. Pozostałe zestawy testów chronią wcześniejsze funkcje.
+
+W przeglądarce: zapytaj „Oblicz 123 razy 8” i sprawdź liczniki pod odpowiedzią. Potem poproś „Podziel 10 przez zero” — oczekiwany jeden błąd, bez pętli ponowień. Złożone zadanie zachowa wcześniejsze wyniki przy awarii źródła lub wyczerpaniu limitu. Wolne API i dokładne granice czasu najlepiej sprawdzać lokalnymi testami z zegarem, zamiast zużywać wywołania modelu.
+
+
+## Przycisk Stop
+
+Podczas `submitted` i `streaming` w czacie jest jeden przycisk „Stop”, wspólny dla odpowiedzi tekstowych, narzędzi, obrazów i głosu. Zastępuje wcześniejsze przyciski „Przerwij odpowiedź” i „Przerwij generowanie”. Nie pojawia się w spoczynku ani podczas samego sprawdzania pliku. Analiza JSON i demo zachowują własne przyciski anulowania.
+
+Kliknięcie wywołuje `useChat.stop()` i czeka na opróżnienie kolejki aktualizacji SDK, a następnie funkcjonalnym `setMessages` zachowuje ostatni stan rozmowy z dopiskiem „Przerwane przez użytkownika”. Nie wysyła dodatkowego żądania ani nie usuwa części odpowiedzi, obrazów, nagrań, etykiet i źródeł. Gdy przerwano przed pierwszym fragmentem, powstaje osobny dopisek przy bieżącej wiadomości; poprzednia odpowiedź nie jest zmieniana. Przycisk ma blokadę ponownego kliknięcia i nowego zadania do czasu zakończenia anulowania.
+
+Abort żądania propaguje się do budżetu zadania, dostawcy i aktywnego narzędzia; dalsze wykonania są blokowane. Nie cofamy już wykonanych operacji, np. zapisanej na życzenie notatki. Po anulowaniu przeglądarka może nie odebrać końcowych metadanych serwera: zachowujemy ostatnie odebrane liczniki, pokazujemy czas do kliknięcia Stop i oznaczamy statystyki jako częściowe. Nieznane liczniki są oznaczone „—”, zamiast wymyślonego zera.
+
+Testy lokalne bez modelu: `npm run test:stop`. W przeglądarce rozpocznij dłuższe zadanie, kliknij „Stop” w trakcie odpowiedzi i sprawdź zachowany tekst oraz dopisek. Sprawdź też przerwanie przed pierwszym fragmentem, podczas tworzenia obrazu/głosu i możliwość wysłania kolejnej wiadomości.
+
+## Asystent podróży `/dashboard`
+
+Link „Podróże” w nagłówku czatu otwiera stronę z pięcioma kartami. Strona wymaga ważnej sesji; `/api/dashboard` sprawdza ją przed odczytem żądania, połączeniami ze źródłami i modelem. Formularz przyjmuje tylko miasto, datę oraz opcjonalne kraj i region służące doprecyzowaniu lokalizacji. Nie można nadpisać modelu, uprawnień ani instrukcji.
+
+Dashboard korzysta z tych samych funkcji co narzędzia agenta: `pogoda`, `waluty`, `swieta`, `wikipedia` i `czas`. Open-Meteo rozpoznaje miasto i strefę czasową. Dołączone oficjalne dane Unicode CLDR 49 wskazują aktualne waluty kraju; NBP dostarcza ostatni opublikowany średni kurs wobec PLN. Przy kilku walutach pokazywane są dostępne kursy, bez zgadywania jednej. Święta to najbliższe trzy ogólnokrajowe dni wolne od daty podróży, w razie potrzeby także z kolejnego roku; nie obejmują zwykłych weekendów ani świąt wyłącznie regionalnych. Wikipedia jest skracana do dwóch zdań. Zegar i różnica względem Polski dotyczą chwili pobrania i uwzględniają czas letni.
+
+Źródła pobierane są równolegle, z ograniczeniem 10 s na kartę i 60 s na zadanie. Błąd jednej karty nie blokuje pozostałych. Prognoza ma dotychczasowy horyzont: dziś i następne 15 dni. Dla dalszej daty karta pokaże brak prognozy, pozostałe informacje pozostaną dostępne. Niejednoznaczne miasto wymaga wyboru kraju/regionu.
+
+Po zebraniu danych jedno wywołanie istniejącego `OPENROUTER_MODEL` przygotowuje 2–3 zdania o pakowaniu i ostrożności, ze schematem walidowanym na serwerze. Instrukcja jest serwerowa, tekst źródeł jest danymi, a model nie dostaje narzędzi ani sekretów. Brak konfiguracji, odmowa lub niepoprawna odpowiedź modelu daje czytelny błąd podsumowania bez usuwania kart. Nie dodano kluczy ani nowego modelu. Samo wejście na stronę nie wywołuje modelu. „Sprawdź” i „Odśwież” pobierają dane bez cache i tworzą nowe podsumowanie; odświeżenie dotyczy ostatnio sprawdzonej podróży i aktualizuje godziny pobrania.
+
+Testy lokalne: `npm run test:dashboard` — sesja/origin przed API, ścisłe dane wejściowe, pięć kart i źródeł, odświeżanie, niejednoznaczne miasto, niezależne błędy, kolejny rok świąt, błąd formatu modelu, brak konfiguracji, aktualne waluty i różnice stref z DST. Wszystkie odpowiedzi API i modelu są atrapami. W przeglądarce: zaloguj się, otwórz „Podróże”, wpisz np. Paryż i jutrzejszą datę, kliknij „Sprawdź”, a potem „Odśwież”. Sprawdź pięć kart, godziny pobrania i podsumowanie. Dla daty za miesiąc spodziewaj się braku prognozy, bez utraty reszty danych. Wylogowana przeglądarka ma wracać z `/dashboard` do logowania.
+
+
+### Stany i błędy kart podróży
+
+Każda karta ma etykietę „OK”, „Ładuję…” lub „Brak danych”. Przed pierwszym sprawdzeniem pokazuje „Brak danych” i instrukcję użycia formularza. Podczas sprawdzania i odświeżania nie pokazuje starych wartości. Po awarii źródła wyświetla „Brak danych — spróbuj odświeżyć” i szczegóły przyczyny, bez pola z wartością zastępczą. Pozostałe karty zachowują niezależne wyniki. Częściowa odpowiedź ma stan „Brak danych” z dopiskiem o potwierdzonej części; ta część może być widoczna, bez uzupełniania braków. Nieudane odświeżenie całego żądania usuwa poprzedni wynik i pozostawia możliwość ponowienia przyciskiem „Odśwież”.
+
+Serwer waliduje każdą kartę oddzielnie, aby niepoprawny wynik jednego źródła nie odrzucał pozostałych. Do podsumowania dołącza stałe nazwy źródeł ze stanem błędu lub niepełnych danych; ich wskazanie nie zależy od posłuszeństwa modelu. Informacja o brakach pojawia się także przy awarii samego modelu. Testy dashboardu obejmują osobne awarie prognozy, NBP, Nager.Date i Wikipedii, API ignorujące abort oraz jawne nazwanie braków, również przy błędzie podsumowania. Testy nie wywołują prawdziwego modelu.
+
+### Tryb „Porównaj”
+
+Na `/dashboard` przełącznik „Porównaj” pokazuje dwa pola miast i jeden wspólny termin. Ten sam endpoint `/api/dashboard` przyjmuje ścisłe żądanie `{mode:"compare", cities:[{miasto,...},{miasto,...}], data:"RRRR-MM-DD"}`; wymaga sesji i zgodnego origin przed odczytem body/API/modelu. Dokładnie dwa miasta, jedna prawdziwa data, bez nadpisywania modelu lub uprawnień. Dotychczasowy format jednej podróży pozostaje dostępny.
+
+`loadTravelCards` w `lib/travel-dashboard.ts` jest wspólnym pobieraniem pięciu kart dla obu trybów. Porównanie ładuje oba miasta równolegle, z niezależnymi błędami kart i lokalizacji. Na dużym ekranie karty są obok siebie i wyrównane według źródła; na telefonie miasta są jedno pod drugim. „Odśwież” pobiera oba miasta ponownie, zachowując wybrane kraje i regiony. Wybór lokalizacji po niejednoznacznej nazwie dotyczy właściwego miasta. Stany i daty pobrania działają tak jak w jednym mieście.
+
+`lib/dashboard-comparison.ts` wykonuje tylko jedną generację rekomendacji, po zebraniu kart, przez istniejący `OPENROUTER_MODEL` i `Output.object`. Nie tworzy osobnych podsumowań obu miast. Schemat wymaga wyboru jednego z dwóch miast i 2–3 powodów z odwołaniami do kart obu lokalizacji. Serwer sprawdza, że wskazane karty mają dane, i sam dołącza wartości dowodów, zamiast przyjmować liczby od modelu. Braki są jawnie nazwane osobno dla każdego miasta, także przy błędzie modelu. Instrukcja zabrania wnioskowania o kosztach wyjazdu na podstawie samego kursu waluty. Bez preferencji model wskazuje praktyczne kryterium wyboru i ujawnia remisy/ograniczenia. To sugestia na podstawie dostępnych kart, nie ranking wszystkich cech miasta.
+
+Brak danych całej lokalizacji albo dwie nazwy tego samego rozpoznanego miasta blokują rekomendację i nie powodują wywołania modelu. Karty poprawnie rozpoznanych miast pozostają widoczne. Niepoprawny format, ucięcie, odmowa i awaria dostawcy nie są zastępowane fikcyjnym zwycięzcą. Klucz, model i instrukcja pozostają na serwerze. Limity czasu pozostają 60 s dla całego porównania i 10 s dla pojedynczego źródła/generacji; nie dodano bibliotek ani nowych kluczy.
+
+`npm run test:dashboard` sprawdza oba tryby na atrapach źródeł i modelu, także walidację dwóch miast, jedną generację, niezależną awarię karty/lokalizacji, wybór regionu, aliasy tego samego miasta, odwołanie do brakującej karty, zły indeks zwycięzcy i niepoprawny wynik modelu. W przeglądarce: „Porównaj” → Paryż oraz Rzym → jutrzejsza data → „Porównaj miasta”. Oczekiwane: dziesięć kart, jedno polecane miasto i podane pod uzasadnieniami konkretne wartości z obu miast. Następnie „Odśwież” i powrót do „Jedno miasto”.
+
+
+### Naprawa karty walut: bez zależności od GitHuba podczas żądania
+
+Mapa kraj–waluta jest dołączona w `lib/country-currency-data.ts` z oficjalnego wydania Unicode CLDR 49, razem z adresem źródła, wersją i datą pobrania. Licencja: `public/licenses/unicode-cldr.txt`. Nie pobieramy jej z GitHuba przy każdym sprawdzeniu miasta, więc awaria lub blokada tego hosta nie ukrywa PLN ani EUR. To tabela referencyjna walut, bez zapisanych kursów. Przy aktualizacji CLDR należy odświeżyć sekcję `region` z podanego źródła. Daty obowiązywania kodów oraz kilka legalnych walut kraju nadal są sprawdzane; nieznany kraj nie dostaje domyślnego EUR ani USD.
+
+Kurs waluty obcej nadal jest pobierany na żywo przez istniejącą funkcję NBP: ostatnie opublikowane notowanie, bez parametru daty podróży i bez ścieżki `/today/`. Dla Wrocławia prawidłowym wynikiem jest `1 PLN = 1 PLN`, bez zapytania o notowanie PLN. Dla Paryża jest to aktualnie dostępny EUR/PLN. Brak odpowiedzi NBP nadal oznacza błąd bez podstawiania starego lub zmyślonego kursu; karta nazywa też oddzielnie brak rozpoznanej waluty kraju. Testy pokrywają Wrocław i Paryż dla dziś/jutra/za tydzień oraz brak połączeń z GitHubem.

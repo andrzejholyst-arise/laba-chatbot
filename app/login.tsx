@@ -1,5 +1,6 @@
 "use client";
 
+import ThemeToggle from "./theme-toggle";
 import { useState } from "react";
 import styles from "./chat.module.css";
 
@@ -8,8 +9,13 @@ export default function Login({ configurationError }: { configurationError: stri
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   return (
-    <main className={styles.chat}>
-      <h1>Wpisz hasło</h1>
+    <main className={`${styles.chat} ${styles.login}`}>
+      <div className={styles.loginCard}>
+        <header className={`${styles.header} ${styles.loginHeader}`}><span className={styles.brandMark} aria-hidden="true">N<span>🍌</span></span><div className={styles.controls}><ThemeToggle /></div></header>
+        <p className={styles.eyebrow}>WITAJ W STUDIO NOVA</p>
+        <h1>Miejsce na dobre pomysły.</h1>
+        <p className={styles.subtitle}>Twój asystent do wiadomości klientów, inspiracji i codziennej pracy.</p>
+        <div className={styles.loginIntro}><h2>Wpisz hasło</h2><p>Zaloguj się, aby rozpocząć rozmowę.</p></div>
       <form className={styles.composer} onSubmit={async (event) => {
         event.preventDefault();
         if (!password || busy || configurationError) return;
@@ -43,6 +49,8 @@ export default function Login({ configurationError }: { configurationError: stri
         {busy && <p role="status">Sprawdzam hasło…</p>}
         {(configurationError || error) && <p className={styles.error} role="alert">{configurationError || error}</p>}
       </form>
+      </div>
+      <p className={styles.loginFootnote}>Studio Nova · Twój asystent w codziennej pracy</p>
     </main>
   );
 }

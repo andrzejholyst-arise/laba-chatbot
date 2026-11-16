@@ -1,3 +1,4 @@
+import { AGENT_TOOL_TIMEOUT_MS } from "./tool-catalog";
 import { speechConfig } from "./model-config";
 import { tool } from "ai";
 import { MAX_SPEECH_BYTES, speechInputSchema } from "./speech-result";
@@ -6,7 +7,7 @@ export async function preparePolishSpeech(input: { tekst: string }, apiKey: stri
   const parsed = speechInputSchema.safeParse(input);
   if (!parsed.success) return { ok: false as const, error: "Nagranie wymaga tekstu od 1 do 2000 znaków." };
   const { model, voice } = speechConfig();
-  const signal = AbortSignal.any([...(abortSignal ? [abortSignal] : []), AbortSignal.timeout(30_000)]);
+  const signal = AbortSignal.any([...(abortSignal ? [abortSignal] : []), AbortSignal.timeout(AGENT_TOOL_TIMEOUT_MS)]);
   try {
     const response = await fetch("https://openrouter.ai/api/v1/audio/speech", {
       method: "POST", cache: "no-store", redirect: "error", signal,

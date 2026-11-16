@@ -1,7 +1,6 @@
 // Funkcja serwerowa. Argument jest wyłącznie punktem zaczepienia dla testów;
-// narzędzie udostępnione modelowi nie przyjmuje żadnych parametrów.
-export function aktualnyCzas(now: Date = new Date()) {
-  const timeZone = "Europe/Warsaw";
+// Stara nazwa pozostaje aliasem czasu warszawskiego. Narzędzie czas obsługuje strefy.
+export function aktualnyCzas(now: Date = new Date(), timeZone = "Europe/Warsaw") {
   return {
     date: new Intl.DateTimeFormat("sv-SE", {
       timeZone, year: "numeric", month: "2-digit", day: "2-digit",

@@ -14,6 +14,7 @@ test("Ochrona czatu i logowania — bez .env i bez wywołań modelu", async (t) 
   const chat = await load("chat");
   const { limitLogin } = await load("limit");
   const cost = await app("lib/consultation-cost.ts");
+  const { AGENT_STEP_LIMIT } = await app("lib/tool-catalog.ts");
   // Wyłącznie sztuczne dane; nigdy nie odczytujemy sekretów użytkownika.
   process.env.NODE_ENV = "test";
   process.env.CHAT_PASSWORD = "warsztat-test-only";
@@ -338,20 +339,20 @@ test("Ochrona czatu i logowania — bez .env i bez wywołań modelu", async (t) 
       assert.equal(output.ok, !fail);
       if (fail) assert.match(output.message, /Nie udało się pobrać prognozy/);
       else assert.equal(output.days[0].rainMm, 2.5);
-      assert.equal(generations, 2);
+      assert.equal(generations, fail ? 1 : 2);
     }
   });
 
-  await t.test("Limit pięciu kroków kończy powtarzane wywołania narzędzia", async (t) => {
+  await t.test("Skonfigurowany limit kroków kończy powtarzane wywołania narzędzia", async (t) => {
     let calls = 0;
     let naturalFinish = false;
     t.mock.method(globalThis, "fetch", async (url) => {
       assert.equal(String(url), "https://openrouter.ai/api/v1/chat/completions");
       calls++;
-      const finishNaturally = naturalFinish && calls === 5;
+      const finishNaturally = naturalFinish && calls === AGENT_STEP_LIMIT;
       const chunks = [
         { id: `limit-${calls}`, model: "test/model", choices: [{ index: 0, delta: finishNaturally ? {
-          role: "assistant", content: "Zadanie zakończone w piątym kroku.",
+          role: "assistant", content: "Zadanie zakończone w ostatnim dozwolonym kroku.",
         } : {
           role: "assistant", tool_calls: [{ index: 0, id: `clock-${calls}`, type: "function", function: { name: "aktualnyCzas", arguments: "{}" } }],
         }, finish_reason: null }] },
@@ -362,19 +363,20 @@ test("Ochrona czatu i logowania — bez .env i bez wywołań modelu", async (t) 
     const response = await chat.POST(req("/api/agent", { messages: [{ id: "limit-user", role: "user", parts: [{ type: "text", text: "Jaki jest czas?" }] }] }, cookie));
     const stream = await response.text();
     assert.ok(!stream.includes('"type":"error"'));
-    assert.equal(calls, 5);
+    assert.equal(calls, AGENT_STEP_LIMIT);
     const finish = stream.split("\n").filter((line) => line.startsWith("data: {")).map((line) => JSON.parse(line.slice(6))).find((part) => part.type === "finish");
     assert.equal(finish.messageMetadata.stepLimitReached, true);
-    assert.equal(finish.messageMetadata.stepsCompleted, 5);
-    // Zakończenie odpowiedzi w piątym kroku nie oznacza wymuszonego przerwania.
+    assert.equal(finish.messageMetadata.stepsCompleted, AGENT_STEP_LIMIT);
+    assert.ok(finish.messageMetadata.partialFindings.some(line => line.includes("Europe/Warsaw")));
+    // Zakończenie odpowiedzi w ostatnim dozwolonym kroku nie oznacza wymuszonego przerwania.
     calls = 0; naturalFinish = true;
     const completed = await chat.POST(req("/api/agent", { messages: [{ id: "natural-user", role: "user", parts: [{ type: "text", text: "Podaj czas." }] }] }, cookie));
     const completedStream = await completed.text();
     const completedFinish = completedStream.split("\n").filter((line) => line.startsWith("data: {")).map((line) => JSON.parse(line.slice(6))).find((part) => part.type === "finish");
-    assert.equal(calls, 5);
+    assert.equal(calls, AGENT_STEP_LIMIT);
     assert.equal(completedFinish.messageMetadata.stepLimitReached, false);
-    assert.equal(completedFinish.messageMetadata.stepsCompleted, 5);
-    assert.ok(completedStream.includes("Zadanie zakończone w piątym kroku."));
+    assert.equal(completedFinish.messageMetadata.stepsCompleted, AGENT_STEP_LIMIT);
+    assert.ok(completedStream.includes("Zadanie zakończone w ostatnim dozwolonym kroku."));
   });
 
   await t.test("Kalkulator: stała cena, dodatnia całkowita liczba i brak nadpisania ceny lub rabatu", () => {

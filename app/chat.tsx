@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import ThemeToggle from "./theme-toggle";
 import { useChat } from "@ai-sdk/react";
 import { useEffect, useRef, useState } from "react";
 import styles from "./chat.module.css";
@@ -10,7 +12,8 @@ import type { ChatMessage } from "../lib/chat-message";
 import MessageSources from "./message-sources";
 import SpeechResponse from "./speech-response";
 import GeneratedImage from "./generated-image";
-import { usedChatTools } from "../lib/used-chat-tools";
+import { AgentLimit, AgentSteps, AgentStats } from "./agent-progress";
+import { markInterrupted } from "../lib/interrupted-message";
 import { chatTransport } from "../lib/chat-transport";
 import { safeImageDataUrl, validatePhotoFile } from "../lib/image-files";
 
@@ -21,7 +24,7 @@ const imageSuggestions = [
 ];
 
 export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
-  const { messages, sendMessage, status, error, clearError, stop } = useChat<ChatMessage>({ transport: chatTransport });
+  const { messages, setMessages, sendMessage, status, error, clearError, stop } = useChat<ChatMessage>({ transport: chatTransport });
   const [input, setInput] = useState("");
   const [leaving, setLeaving] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -37,13 +40,34 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
   const imageGeneration = useRef(false);
   const messageSending = useRef(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
-  const busy = status === "submitted" || status === "streaming" || imageBusy || voiceBusy || photoValidating;
+  const stopping = useRef(false);
+  const taskStarted = useRef<number | null>(null);
+  const [stopPending, setStopPending] = useState(false);
+  const agentWorking = status === "submitted" || status === "streaming";
+  const busy = agentWorking || imageBusy || voiceBusy || photoValidating || stopPending;
+
+  async function stopTask() {
+    if (!agentWorking || stopping.current) return;
+    stopping.current = true;
+    setStopPending(true);
+    const durationMs = Math.max(0, performance.now() - (taskStarted.current ?? performance.now()));
+    try {
+      // SDK czeka też na zakończenie kolejki aktualizacji wiadomości.
+      await stop();
+      clearError();
+      setMessages(current => markInterrupted(current, crypto.randomUUID(), durationMs));
+    } finally {
+      stopping.current = false;
+      setStopPending(false);
+    }
+  }
 
   useEffect(() => () => { void stop(); }, [stop]);
 
   async function sendText(responseFormat: "text" | "audio" = "text") {
     const text = input.trim();
-    if (!text || busy || leaving || messageSending.current || imageGeneration.current || photoValidation.current) return;
+    if (!text || busy || leaving || stopping.current || messageSending.current || imageGeneration.current || photoValidation.current) return;
+    taskStarted.current = performance.now();
     messageSending.current = true;
     setVoiceBusy(responseFormat === "audio");
     clearError(); setInput(""); setImageError("");
@@ -51,28 +75,28 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
     setPhoto(undefined);
     if (fileInput.current) fileInput.current.value = "";
     try { await sendMessage({ text, files }, { body: { responseFormat } }); }
-    catch { setImageError("Nie udało się wysłać wiadomości. Spróbuj ponownie."); }
+    catch { if (!stopping.current) setImageError("Nie udało się wysłać wiadomości. Spróbuj ponownie."); }
     finally { messageSending.current = false; setVoiceBusy(false); }
   }
 
   async function generatePicture() {
     const prompt = input.trim();
     // Ref blokuje kolejne kliknięcie również przed następnym renderem Reacta.
-    if (!prompt || busy || leaving || messageSending.current || imageGeneration.current || photoValidation.current) return;
+    if (!prompt || busy || leaving || stopping.current || messageSending.current || imageGeneration.current || photoValidation.current) return;
     setImageError("");
     if (prompt.length > 500) { setImageError("Opis obrazu może mieć maksymalnie 500 znaków."); return; }
     if (photo?.length) { setImageError("Usuń załączone zdjęcie, aby wygenerować nowy obraz z opisu."); return; }
+    taskStarted.current = performance.now();
     imageGeneration.current = true;
     setImageBusy(true);
     clearError();
     setInput("");
-    const timer = window.setTimeout(() => { void stop(); }, 55_000);
     try {
       await sendMessage({ text: `Wygeneruj obraz: ${prompt}` });
     } catch {
-      setImageError("Nie udało się uruchomić generowania obrazu. Spróbuj ponownie.");
+      if (!stopping.current) setImageError("Nie udało się uruchomić generowania obrazu. Spróbuj ponownie.");
     } finally {
-      window.clearTimeout(timer); imageGeneration.current = false; setImageBusy(false);
+      imageGeneration.current = false; setImageBusy(false);
     }
   }
 
@@ -90,8 +114,15 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
 
   return (
     <main className={styles.chat}>
-      <h1>Mój chatbot</h1>
+      <header className={styles.header}>
+        <div className={styles.brand}>
+          <span className={styles.brandMark} aria-hidden="true">N<span>🍌</span></span>
+          <div><p className={styles.eyebrow}>TWÓJ ASYSTENT</p><h1>Studio Nova</h1>
+            <p className={styles.subtitle}>Przestrzeń na dobre odpowiedzi i nowe pomysły.</p></div>
+        </div>
       <div className={styles.controls}>
+        <ThemeToggle />
+        <Link className={styles.navLink} href="/dashboard" prefetch={false}>Podróże ↗</Link>
         <button type="button" disabled={leaving || imageBusy} onClick={async () => {
           setLeaving(true);
           setLogoutError("");
@@ -106,8 +137,9 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
           }
         }}>Wyjdź</button>
       </div>
+      </header>
       {logoutError && <p className={styles.error} role="alert">{logoutError}</p>}
-      <div className={styles.controls} aria-label="Tryb pracy">
+      <div className={`${styles.controls} ${styles.tabs}`} aria-label="Tryb pracy">
         <button type="button" aria-pressed={mode === "chat"} disabled={busy || leaving}
           onClick={() => setMode("chat")}>Zwykły czat</button>
         <button type="button" aria-pressed={mode === "analysis"} disabled={busy || leaving}
@@ -117,7 +149,7 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
       </div>
       {mode === "analysis" && <MessageAnalysis disabled={leaving} />}
       {mode === "demo" && <PromptDemo cases={demoCases} disabled={leaving} />}
-      <div hidden={mode !== "chat"} className={styles.composer}>
+      <div hidden={mode !== "chat"} className={styles.chatPane}>
       <section
         className={styles.conversation}
         ref={conversation}
@@ -126,12 +158,17 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
         aria-live="polite"
         aria-busy={busy}
       >
+        {messages.length === 0 && <div className={styles.emptyState}>
+          <span className={styles.emptyIcon} aria-hidden="true">🐒</span>
+          <p className={styles.eyebrow}>STUDIO NOVA</p>
+          <h2>Od czego zaczniemy?</h2>
+          <p>Przygotuj szkic odpowiedzi dla klienta, zadaj pytanie lub stwórz obraz. Możesz też dodać zdjęcie.</p>
+          <small>Ty wybierasz temat. Ja pomagam go rozwinąć.</small>
+        </div>}
         {messages.map((message) => (
-          <div className={styles.message} key={message.id}>
+          <div className={styles.message} data-role={message.role} key={message.id}>
             <strong>{message.role === "user" ? "Ty" : "Chatbot"}</strong>
-            {usedChatTools(message).length > 0 && <div className={styles.toolBadges} aria-label="Użyte narzędzia">
-              {usedChatTools(message).map((label, index) => <span key={`${index}-${label}`}>{index + 1}. {label}</span>)}
-            </div>}
+            <AgentSteps message={message} />
             {message.parts.map((part, index) => {
               if (part.type === "tool-odpowiedzPoPolsku" && part.state === "output-available") return <SpeechResponse key={index} output={part.output} id={`${message.id}-${index}`} />;
               if (part.type === "tool-odpowiedzPoPolsku" && part.state === "output-error") return <p key={index} role="alert" className={styles.error}>Nie udało się przygotować nagrania.</p>;
@@ -148,19 +185,21 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
               }
               return null;
             })}
-            {message.role === "assistant" && message.metadata?.stepLimitReached &&
-              <p role="status">Przerwałem po 5 krokach</p>}
+            <AgentLimit message={message} />
             {message.role === "assistant" && (message.metadata?.vision || message.metadata?.generatedImage) &&
               <small className={styles.modelCaption}>Model: {message.metadata.modelId || "API nie podało identyfikatora użytego modelu."}</small>}
             <MessageSources message={message} />
+            <AgentStats message={message} />
           </div>
         ))}
       </section>
-      {busy && (
-        <p role="status">
-          {generatingVoice ? "Przygotowuję odpowiedź głosową…" : generatingImage ? "Generuję obraz…" : photoValidating ? "Sprawdzam zdjęcie…" : status === "submitted" ? "Czekam na odpowiedź…" : "Chatbot pisze…"}
+      <div className={styles.composeDock}>
+      {busy && <div className={styles.agentActivity}>
+        <p className={styles.activity} role="status">
+          {stopPending ? "Przerywam…" : generatingVoice ? "Przygotowuję odpowiedź głosową…" : generatingImage ? "Generuję obraz…" : photoValidating ? "Sprawdzam zdjęcie…" : status === "submitted" ? "Czekam na odpowiedź…" : "Chatbot pisze…"}
         </p>
-      )}
+        {agentWorking && <button type="button" className={styles.stopButton} disabled={stopPending} onClick={() => void stopTask()}>Stop</button>}
+      </div>}
       {error && (
         <p className={styles.error} role="alert">
           {error.message.startsWith("Failed") ? "Nie udało się połączyć z serwerem. Spróbuj ponownie." : error.message}
@@ -168,7 +207,7 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
       )}
       {imageError && <p className={styles.error} role="alert">{imageError}</p>}
       <form
-        className={styles.composer}
+        className={`${styles.composer} ${styles.messageForm}`}
         onSubmit={(event) => {
           event.preventDefault();
           void sendText();
@@ -219,15 +258,14 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
               }
             }} />
           <button type="button" disabled={busy || leaving || !input.trim()} onClick={() => void sendText("audio")}>Odpowiedz głosem</button>
-          {generatingVoice && <button type="button" onClick={() => { void stop(); }}>Przerwij odpowiedź</button>}
           <button type="button" disabled={busy || leaving} onClick={() => fileInput.current?.click()}>Dodaj zdjęcie</button>
           <button type="button" disabled={busy || leaving || !input.trim()} onClick={() => void generatePicture()}>Wygeneruj obraz</button>
-          {generatingImage && <button type="button" onClick={() => { void stop(); }}>Przerwij generowanie</button>}
         </div>
         {photo?.[0] && <p>Zdjęcie: {photo[0].name} <button type="button" disabled={busy || leaving} onClick={() => {
           setPhoto(undefined); if (fileInput.current) fileInput.current.value = "";
         }}>Usuń zdjęcie</button></p>}
       </form>
+      </div>
       </div>
     </main>
   );

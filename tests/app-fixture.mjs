@@ -9,7 +9,7 @@ export async function loadApp(t) {
   const temp = await mkdtemp(resolve(".next/app-tests-"));
   t.after(() => rm(temp, { recursive: true, force: true }));
   const files = (await readdir("lib")).filter((name) => name.endsWith(".ts")).map((name) => `lib/${name}`);
-  files.push("app/api/agent/route.ts", "app/api/login/route.ts", "app/api/logout/route.ts");
+  files.push("app/api/dashboard/route.ts", "app/api/agent/route.ts", "app/api/login/route.ts", "app/api/logout/route.ts");
   for (const path of files) {
     const source = (await readFile(path, "utf8")).replace(/(from\s+["'])(\.[^"']+)(["'])/g, "$1$2.mjs$3");
     const target = join(temp, path.replace(/\.ts$/, ".mjs"));

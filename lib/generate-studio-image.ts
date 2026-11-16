@@ -1,3 +1,4 @@
+import { AGENT_TOOL_TIMEOUT_MS } from "./tool-catalog";
 import { imageModelId } from "./model-config";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { APICallError, generateImage, tool } from "ai";
@@ -8,7 +9,7 @@ import { imagePromptSchema, imageToolResultSchema, type ImageToolResult } from "
 
 async function generateStudioImage(prompt: string, apiKey: string, abortSignal?: AbortSignal): Promise<ImageToolResult> {
   let actualModel: string | null = null;
-  const signal = AbortSignal.any([...(abortSignal ? [abortSignal] : []), AbortSignal.timeout(50_000)]);
+  const signal = AbortSignal.any([...(abortSignal ? [abortSignal] : []), AbortSignal.timeout(AGENT_TOOL_TIMEOUT_MS)]);
   try {
     const openrouter = createOpenRouter({ apiKey, fetch: async (url, init) => {
       const response = await fetch(url, init);

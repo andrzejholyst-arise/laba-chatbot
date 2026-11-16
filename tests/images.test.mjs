@@ -223,8 +223,7 @@ test("Zdjęcia i generowanie — lokalna atrapa, bez .env i wywołań modeli", a
       assert.equal(result.ok, false);
       assert.match(result.error, /OpenRouter|obraz/);
       assert.ok(!JSON.stringify(result).includes("PRIVATE"));
-      const toolReply = chatRequests[1].messages.find((message) => message.role === "tool");
-      assert.notEqual(toolReply.content, "obraz wygenerowany");
+      assert.equal(chatRequests.length, 1, "Błąd obrazu nie może uruchamiać kolejnej generacji modelu");
       assert.equal("dataUrl" in result, false);
     }
     status = 200;

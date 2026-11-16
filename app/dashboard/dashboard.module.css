@@ -1,0 +1,77 @@
+.dashboard { padding-bottom: 36px; gap: 24px; }
+.search { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(160px, .7fr) auto auto; align-items: end; gap: 14px; padding: 24px; border: 1px solid var(--composer-border); border-radius: 18px; background: var(--surface); box-shadow: 0 6px 26px var(--leaf-shadow); }
+.search > div { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.search label { font-size: 13px; font-weight: 700; }
+.search input { width: 100%; min-width: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--field); color: var(--foreground); font: inherit; font-size: 15px; line-height: 1.5; }
+.search button { min-height: 49px; background: var(--primary); color: var(--on-primary); }
+.search button:hover:not(:disabled) { background: var(--primary-hover); }
+.search .refresh { background: var(--action-bg); color: var(--accent); border-color: var(--action-border); }
+.search .refresh:hover:not(:disabled) { background: var(--action-hover); }
+.loading { color: var(--accent); font-weight: 600; font-size: 13px; padding: 12px 16px; border-radius: 10px; background: var(--accent-soft); }
+.resultHeading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px 24px; }
+.resultHeading h2 { font-size: 24px; }
+.resultHeading p { font-size: 12px; color: var(--muted); }
+.cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.card { min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--border); background: var(--surface); border-radius: 18px; padding: 20px; overflow-wrap: anywhere; }
+.card:nth-child(4) { grid-column: span 2; }
+.cardHeader { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.cardHeader > div { flex: 1; min-width: 120px; }
+.cardHeader h3 { font-size: 16px; }
+.cardHeader p { color: var(--muted); font-size: 11px; margin-top: 3px; }
+.icon { display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0; background: var(--accent-soft); border-radius: 12px; font-size: 22px; }
+.cardBody { flex: 1; padding: 22px 0; font-size: 13px; line-height: 1.7; }
+.cardBody .value { font-size: clamp(24px, 3vw, 33px); font-weight: 750; line-height: 1.3; letter-spacing: -.8px; margin-bottom: 9px; color: var(--foreground); }
+.value span { font-size: 14px; font-weight: 600; letter-spacing: 0; color: var(--muted); }
+.cardBody small { display: block; color: var(--muted); font-size: 11px; margin-top: 12px; line-height: 1.6; }
+.cardBody .detail { margin-top: 12px; }
+.rate + .rate { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
+.holidayList { padding: 0; margin: 16px 0 0; list-style: none; }
+.holidayList li { border-top: 1px solid var(--border); padding: 8px 0; display: flex; flex-direction: column; gap: 2px; }
+.holidayList time { font-size: 11px; color: var(--muted); }
+.cardBody .unit { display: inline-block; color: var(--banana-text); background: var(--banana-soft); border-radius: 7px; padding: 3px 9px; font-size: 11px; font-weight: 650; margin-bottom: 14px; }
+.wikiText { font-size: 15px; }
+.articleLink { display: inline-block; margin-top: 14px; font-weight: 650; font-size: 12px; }
+.difference { margin-top: 14px !important; font-size: 13px; font-weight: 650; color: var(--accent); }
+.cardFooter { display: flex; flex-direction: column; gap: 5px; border-top: 1px solid var(--border); padding-top: 12px; font-size: 10px; color: var(--muted); }
+.cardFooter a { font-weight: 600; }
+.placeholder { color: var(--muted); font-size: 13px; }
+.cardError { padding: 12px; color: var(--error-text); background: var(--error-bg); border: 1px solid var(--error-border); border-radius: 10px; font-size: 13px; }
+.warning { color: var(--banana-text); background: var(--banana-soft); font-size: 11px; border-radius: 8px; padding: 5px 8px; }
+.warning { margin-top: 12px !important; }
+.dashboard .summary { display: flex; gap: 18px; padding: 26px; margin-bottom: 0; background: var(--surface); }
+.summaryIcon { display: grid; place-items: center; width: 54px; height: 54px; flex-shrink: 0; font-size: 31px; border-radius: 16px; background: var(--banana-soft); }
+.summary > div { min-width: 0; }
+.summary h2 { margin-bottom: 12px; }
+.summaryText { font-size: 15px; line-height: 1.8; }
+.summary small { display: block; color: var(--muted); font-size: 10px; margin-top: 14px; overflow-wrap: anywhere; }
+.footnote { color: var(--muted); font-size: 11px; line-height: 1.7; }
+.dashboard .choices { margin-bottom: 0; }
+.choices h2 { margin-bottom: 12px; }
+.choices > div { display: flex; gap: 8px; flex-wrap: wrap; }
+.choices button { color: var(--accent); background: var(--action-bg); border-color: var(--action-border); }
+@media (max-width: 850px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .card:nth-child(4) { grid-column: auto; } .card:last-child { grid-column: span 2; } .search { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 540px) { .cards { grid-template-columns: 1fr; } .card:last-child { grid-column: auto; } .search { padding: 18px; gap: 12px; } .search > div { grid-column: span 2; } .search input { font-size: 16px; } .card { padding: 18px; } .dashboard .summary { padding: 18px; gap: 12px; } .summaryIcon { width: 40px; height: 40px; font-size: 24px; } .summary h2 { font-size: 19px; } .resultHeading { flex-direction: column; } }
+
+.cardState { font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 8px; white-space: nowrap; }
+.stateOk { color: var(--badge-text); background: var(--badge-bg); }
+.stateLoading { color: var(--accent); background: var(--accent-soft); }
+.stateMissing { color: var(--banana-text); background: var(--banana-soft); }
+.modeSwitch { display: flex; gap: 8px; flex-wrap: wrap; }
+.modeSwitch button { background: var(--action-bg); color: var(--accent); border-color: var(--action-border); }
+.modeSwitch button[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); }
+.compareContent { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.compareSearch { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.compareSearch > div:nth-child(3) { grid-column: span 2; }
+.comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: stretch; }
+.comparisonCity { min-width: 0; display: grid; grid-template-rows: subgrid; grid-row: span 6; gap: 16px; }
+.cityHeading { padding: 8px 4px; overflow-wrap: anywhere; }
+.cityHeading h2 { font-size: 24px; margin-top: 5px; }
+.cityHeading > p:last-child:not(:first-child) { color: var(--muted); font-size: 12px; margin-top: 5px; }
+.comparisonCity .cards { display: contents; }
+.comparisonCity .card { grid-column: auto; }
+.cityChoices { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.cityChoices button { color: var(--accent); background: var(--action-bg); border-color: var(--action-border); text-align: left; }
+.reasons { padding-left: 20px; font-size: 15px; line-height: 1.7; }
+.reasons li + li { margin-top: 16px; }
+.reasons small { margin-top: 5px; }
+@media (max-width: 650px) { .comparison { grid-template-columns: minmax(0, 1fr); } .compareSearch > div { grid-column: span 2; } }

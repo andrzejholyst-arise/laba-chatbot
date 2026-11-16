@@ -1,3 +1,4 @@
+import { AGENT_TOOL_TIMEOUT_MS } from "./tool-catalog";
 import { z } from "zod";
 
 export const gardenRainInputSchema = z.strictObject({
@@ -28,7 +29,7 @@ export async function opadyDlaOgrodnika(input: z.input<typeof gardenRainInputSch
     timezone: "Europe/Warsaw", forecast_days: String(days),
   }).toString();
   try {
-    const timeout = AbortSignal.timeout(8000);
+    const timeout = AbortSignal.timeout(AGENT_TOOL_TIMEOUT_MS);
     const response = await fetch(url, {
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       cache: "no-store", redirect: "error",
