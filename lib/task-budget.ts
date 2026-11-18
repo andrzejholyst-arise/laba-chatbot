@@ -1,11 +1,13 @@
 import type { ToolSet } from "ai";
-import { AGENT_TOOL_LIMIT, AGENT_TASK_TIMEOUT_MS, AGENT_TOOL_TIMEOUT_MS } from "./tool-catalog";
+import { AGENT_TOOL_LIMIT, AGENT_TASK_TIMEOUT_MS, AGENT_TOOL_TIMEOUT_MS, AGENT_MODEL_FIRST_TIMEOUT_MS, AGENT_MODEL_IDLE_TIMEOUT_MS } from "./tool-catalog";
+import { modelHttpError } from "./model-errors";
 import { getAgentStepLimit } from "./agent-config";
 import { toolFinding } from "./tool-findings";
 
 export type StopReason = "step_limit" | "tool_limit" | "time_limit" | "tool_error" | "provider_error" | "cancelled";
 export type ToolFailure = { tool: string; message: string };
 export const SOURCE_TIMEOUT_MESSAGE = "źródło nie odpowiada";
+type TaskLimits = { steps: number; tools: number; taskMs: number; toolMs: number; modelFirstMs?: number; modelIdleMs?: number };
 
 export class TaskBudget {
   readonly controller = new AbortController();
@@ -25,7 +27,7 @@ export class TaskBudget {
   private timer: ReturnType<typeof setTimeout>;
   private detach: () => void;
 
-  constructor(clientSignal?: AbortSignal, readonly limits = { steps: getAgentStepLimit(), tools: AGENT_TOOL_LIMIT, taskMs: AGENT_TASK_TIMEOUT_MS, toolMs: AGENT_TOOL_TIMEOUT_MS }) {
+  constructor(clientSignal?: AbortSignal, readonly limits: TaskLimits = { steps: getAgentStepLimit(), tools: AGENT_TOOL_LIMIT, taskMs: AGENT_TASK_TIMEOUT_MS, toolMs: AGENT_TOOL_TIMEOUT_MS }) {
     this.timer = setTimeout(() => this.stop("time_limit", "Upłynął limit 60 sekund na zadanie.", true), limits.taskMs);
     const cancel = () => this.stop("cancelled", "Przerwane przez użytkownika", true);
     clientSignal?.addEventListener("abort", cancel, { once: true });
@@ -129,18 +131,29 @@ export function guardTools<T extends ToolSet>(tools: T, budget: TaskBudget): T {
   })) as T;
 }
 
-// Wyszukiwanie native jest częścią żądania modelu: provider nie udostępnia
-// osobnego startu/stopu. Ograniczamy całe takie żądanie, łącznie ze streamem.
-export async function boundedModelFetch(url: RequestInfo | URL, init: RequestInit | undefined, budget: TaskBudget, nativeSearch: boolean) {
+// Odpowiedź modelu i native search współdzielą stream. Limit narzędzia 10 s
+// nie obejmuje modelu: czekamy do 45 s na pierwsze dane, potem do 20 s ciszy.
+// Globalny budżet 60 s obowiązuje przez cały czas, także przy keep-alive.
+export async function boundedModelFetch(url: RequestInfo | URL, init: RequestInit | undefined, budget: TaskBudget) {
   const source = new AbortController();
   const signal = AbortSignal.any([budget.signal, source.signal, ...(init?.signal ? [init.signal] : [])]);
-  const timer = nativeSearch ? setTimeout(() => {
-    budget.fail("OpenRouter", `${SOURCE_TIMEOUT_MESSAGE} (odpowiedź lub wyszukiwanie native)`, true);
-    source.abort(new Error(SOURCE_TIMEOUT_MESSAGE));
-  }, budget.limits.toolMs) : undefined;
-  const clear = () => { if (timer !== undefined) clearTimeout(timer); };
+  let timer: ReturnType<typeof setTimeout>;
+  const arm = (idle: boolean) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const message = idle
+        ? "[OPENROUTER_IDLE_TIMEOUT] Model przestał przesyłać dane. Zachowano dostępny wynik częściowy."
+        : "[OPENROUTER_FIRST_TIMEOUT] Model nie rozpoczął przesyłania odpowiedzi w wyznaczonym czasie. Spróbuj ponownie.";
+      budget.stop("provider_error", message, true);
+      source.abort(new Error(message));
+    }, idle ? budget.limits.modelIdleMs ?? AGENT_MODEL_IDLE_TIMEOUT_MS : budget.limits.modelFirstMs ?? AGENT_MODEL_FIRST_TIMEOUT_MS);
+  };
+  const clear = () => { clearTimeout(timer); signal.removeEventListener("abort", clear); };
+  arm(false);
+  signal.addEventListener("abort", clear, { once: true });
   try {
     const response = await budget.waitFor(fetch(url, { ...init, signal }), signal);
+    if (!response.ok && !budget.reason) budget.stop("provider_error", modelHttpError(response.status));
     if (!response.ok || !response.body) { clear(); return response; }
     const reader = response.body.getReader();
     return new Response(new ReadableStream<Uint8Array>({
@@ -148,10 +161,18 @@ export async function boundedModelFetch(url: RequestInfo | URL, init: RequestIni
         try {
           const { done, value } = await budget.waitFor(reader.read(), signal);
           if (done) { clear(); controller.close(); }
-          else controller.enqueue(value);
-        } catch (error) { clear(); void reader.cancel().catch(() => {}); controller.error(error); }
+          else { if (value.byteLength) arm(true); controller.enqueue(value); }
+        } catch (error) {
+          clear(); void reader.cancel().catch(() => {});
+          if (!budget.reason) budget.stop("provider_error", modelHttpError());
+          controller.error(error);
+        }
       },
       cancel() { clear(); source.abort(); return reader.cancel(); },
     }), { status: response.status, statusText: response.statusText, headers: response.headers });
-  } catch (error) { clear(); throw error; }
+  } catch (error) {
+    clear();
+    if (!budget.reason && !signal.aborted) budget.stop("provider_error", "[OPENROUTER_CONNECTION] Nie udało się połączyć z OpenRouter. Sprawdź połączenie i spróbuj ponownie.");
+    throw error;
+  }
 }

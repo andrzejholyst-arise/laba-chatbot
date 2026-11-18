@@ -14,6 +14,7 @@ const requestSchema = z.discriminatedUnion("mode", [
     mode: z.literal("chat"), messages: z.array(z.unknown()),
     responseFormat: z.enum(["text", "audio"]).optional(),
     id: z.string().optional(),
+    conversationId: z.uuid().optional(),
     trigger: z.enum(["submit-message", "regenerate-message"]).optional(),
     messageId: z.string().optional(),
   }),

@@ -23,8 +23,30 @@ const imageSuggestions = [
   { label: "Miejsce do rozmowy", prompt: "Przytulne domowe miejsce do konsultacji online: biurko z laptopem, roślina i notes, naturalne światło, spokojny fotograficzny styl, bez ludzi i napisów." },
 ];
 
-export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
-  const { messages, setMessages, sendMessage, status, error, clearError, stop } = useChat<ChatMessage>({ transport: chatTransport });
+function setConversationAddress(id?: string) {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("conversation");
+  url.searchParams.delete("new");
+  url.searchParams.set(id ? "conversation" : "new", id ?? "1");
+  window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+}
+
+export default function Chat({ demoCases, initialConversationId, startNew = false }: {
+  demoCases: DemoCase[]; initialConversationId?: string; startNew?: boolean;
+}) {
+  const { messages, setMessages, sendMessage, status, error, clearError, stop } = useChat<ChatMessage>({
+    transport: chatTransport,
+    onFinish: ({ message }) => {
+      if (message.metadata?.persisted && message.metadata.conversationId) setConversationAddress(message.metadata.conversationId);
+    },
+  });
+  const conversationId = useRef<string | null>(null);
+  const [historyReady, setHistoryReady] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [greetingName, setGreetingName] = useState<string | null>(null);
+  const [greetingReady, setGreetingReady] = useState(false);
+  const [greetingError, setGreetingError] = useState("");
+  const greetingRequest = useRef(0);
   const [input, setInput] = useState("");
   const [leaving, setLeaving] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -44,7 +66,64 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
   const taskStarted = useRef<number | null>(null);
   const [stopPending, setStopPending] = useState(false);
   const agentWorking = status === "submitted" || status === "streaming";
-  const busy = agentWorking || imageBusy || voiceBusy || photoValidating || stopPending;
+  const taskBusy = agentWorking || imageBusy || voiceBusy || photoValidating || stopPending;
+  const busy = !historyReady || taskBusy;
+
+  async function loadGreeting(signal?: AbortSignal) {
+    const version = ++greetingRequest.current;
+    setGreetingReady(false); setGreetingError(""); setGreetingName(null);
+    try {
+      const response = await fetch("/api/profile", { cache: "no-store", signal });
+      if (response.status === 401) { window.location.replace("/"); return; }
+      const body = await response.json();
+      if (!response.ok) throw new Error("Nie udało się wczytać powitania z profilu.");
+      if (!signal?.aborted && version === greetingRequest.current) { setGreetingName(body.name); setGreetingReady(true); }
+    } catch {
+      if (!signal?.aborted && version === greetingRequest.current) setGreetingError("Nie udało się wczytać powitania z profilu.");
+    }
+  }
+
+  async function loadHistory(signal?: AbortSignal) {
+    setHistoryReady(false);
+    setHistoryError("");
+    try {
+      const endpoint = initialConversationId ? `/api/conversations?id=${encodeURIComponent(initialConversationId)}` : "/api/conversations";
+      const response = await fetch(endpoint, { cache: "no-store", signal });
+      if (response.status === 401) { window.location.replace("/"); return; }
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error?.message || "Nie udało się wczytać rozmowy.");
+      if (signal?.aborted) return;
+      conversationId.current = body.conversationId ?? crypto.randomUUID();
+      setMessages(body.messages);
+      setConversationAddress(body.conversationId ?? undefined);
+      setHistoryReady(true);
+    } catch (error) {
+      if (!signal?.aborted) setHistoryError(error instanceof Error ? error.message : "Nie udało się wczytać rozmowy.");
+    }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadGreeting(controller.signal);
+    if (startNew) {
+      conversationId.current = crypto.randomUUID();
+      setMessages([]);
+      setHistoryReady(true);
+    } else void loadHistory(controller.signal);
+    return () => controller.abort();
+    // Historia ładowana raz po wejściu, kolejne wiadomości obsługuje useChat.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function newConversation() {
+    if (busy || leaving || messageSending.current || imageGeneration.current) return;
+    conversationId.current = crypto.randomUUID();
+    setConversationAddress();
+    setMessages([]);
+    void loadGreeting();
+    setInput(""); setPhoto(undefined); setImageError(""); clearError();
+    if (fileInput.current) fileInput.current.value = "";
+  }
 
   async function stopTask() {
     if (!agentWorking || stopping.current) return;
@@ -74,7 +153,7 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
     const files = photo;
     setPhoto(undefined);
     if (fileInput.current) fileInput.current.value = "";
-    try { await sendMessage({ text, files }, { body: { responseFormat } }); }
+    try { await sendMessage({ text, files }, { body: { responseFormat, conversationId: conversationId.current } }); }
     catch { if (!stopping.current) setImageError("Nie udało się wysłać wiadomości. Spróbuj ponownie."); }
     finally { messageSending.current = false; setVoiceBusy(false); }
   }
@@ -92,7 +171,7 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
     clearError();
     setInput("");
     try {
-      await sendMessage({ text: `Wygeneruj obraz: ${prompt}` });
+      await sendMessage({ text: `Wygeneruj obraz: ${prompt}` }, { body: { conversationId: conversationId.current } });
     } catch {
       if (!stopping.current) setImageError("Nie udało się uruchomić generowania obrazu. Spróbuj ponownie.");
     } finally {
@@ -122,6 +201,9 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
         </div>
       <div className={styles.controls}>
         <ThemeToggle />
+        <button type="button" disabled={busy || leaving} onClick={newConversation}>Nowa rozmowa</button>
+        <Link className={styles.navLink} href="/history" prefetch={false}>Historia</Link>
+        <Link className={styles.navLink} href="/profile" prefetch={false}>Profil</Link>
         <Link className={styles.navLink} href="/dashboard" prefetch={false}>Podróże ↗</Link>
         <button type="button" disabled={leaving || imageBusy} onClick={async () => {
           setLeaving(true);
@@ -139,6 +221,8 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
       </div>
       </header>
       {logoutError && <p className={styles.error} role="alert">{logoutError}</p>}
+      {!historyReady && !historyError && <p role="status">Wczytuję rozmowę…</p>}
+      {historyError && <p className={styles.error} role="alert">{historyError} <button type="button" onClick={() => void loadHistory()}>Spróbuj ponownie</button></p>}
       <div className={`${styles.controls} ${styles.tabs}`} aria-label="Tryb pracy">
         <button type="button" aria-pressed={mode === "chat"} disabled={busy || leaving}
           onClick={() => setMode("chat")}>Zwykły czat</button>
@@ -161,7 +245,10 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
         {messages.length === 0 && <div className={styles.emptyState}>
           <span className={styles.emptyIcon} aria-hidden="true">🐒</span>
           <p className={styles.eyebrow}>STUDIO NOVA</p>
-          <h2>Od czego zaczniemy?</h2>
+          <h2>{greetingReady ? greetingName ? `Dzień dobry, ${greetingName}!` : "Dzień dobry!" : "Od czego zaczniemy?"}</h2>
+          {greetingReady && !greetingName && <p>Jak mam się do Ciebie zwracać?</p>}
+          {!greetingReady && !greetingError && <p role="status">Przygotowuję powitanie…</p>}
+          {greetingError && <p role="alert">{greetingError} <button type="button" onClick={() => void loadGreeting()}>Spróbuj ponownie</button></p>}
           <p>Przygotuj szkic odpowiedzi dla klienta, zadaj pytanie lub stwórz obraz. Możesz też dodać zdjęcie.</p>
           <small>Ty wybierasz temat. Ja pomagam go rozwinąć.</small>
         </div>}
@@ -190,11 +277,14 @@ export default function Chat({ demoCases }: { demoCases: DemoCase[] }) {
               <small className={styles.modelCaption}>Model: {message.metadata.modelId || "API nie podało identyfikatora użytego modelu."}</small>}
             <MessageSources message={message} />
             <AgentStats message={message} />
+            {message.metadata?.persistenceError && <p className={styles.error} role="alert">{message.metadata.persistenceError}</p>}
+            {message.metadata?.titleError && <p className={styles.error} role="alert">{message.metadata.titleError}</p>}
+            {message.metadata?.persisted === false && !message.metadata.persistenceError && <small>Nie zapisano nieukończonej odpowiedzi w historii.</small>}
           </div>
         ))}
       </section>
       <div className={styles.composeDock}>
-      {busy && <div className={styles.agentActivity}>
+      {taskBusy && <div className={styles.agentActivity}>
         <p className={styles.activity} role="status">
           {stopPending ? "Przerywam…" : generatingVoice ? "Przygotowuję odpowiedź głosową…" : generatingImage ? "Generuję obraz…" : photoValidating ? "Sprawdzam zdjęcie…" : status === "submitted" ? "Czekam na odpowiedź…" : "Chatbot pisze…"}
         </p>

@@ -6,4 +6,5 @@ export type ChatMessage = UIMessage<{
   modelSteps?: number; stepLimit?: number; toolCalls?: number; durationMs?: number;
   stopReason?: StopReason; stopMessage?: string; toolFailures?: ToolFailure[]; blockedToolCallIds?: string[];
   stepLimitReached?: boolean; stepsCompleted?: number; partialFindings?: string[];
+  conversationId?: string; persisted?: boolean; persistenceError?: string; titleError?: string;
 }>;

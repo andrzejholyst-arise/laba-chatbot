@@ -4,7 +4,7 @@ import { loadApp } from "./app-fixture.mjs";
 
 test("Budżet zadania — bez modeli i zewnętrznych API", async t => {
   const app = await loadApp(t);
-  const { TaskBudget } = await app("lib/task-budget.ts");
+  const { TaskBudget, boundedModelFetch } = await app("lib/task-budget.ts");
   const { chatResponse } = await app("lib/agent-chat.ts");
   const { sessionNotes } = await app("lib/session-notes.ts");
   const { createSession } = await app("lib/session.ts");
@@ -114,7 +114,7 @@ test("Budżet zadania — bez modeli i zewnętrznych API", async t => {
     assert.equal(output.some(chunk => chunk.type === "error"), false);
   });
 
-  await t.test("Timeout narzędzia i niedokończonego streamu native kończy się czytelnym wynikiem", async t => {
+  await t.test("Timeout narzędzia i zatrzymanego streamu mają różne komunikaty i zachowują część odpowiedzi", async t => {
     let mode = "tool";
     t.mock.method(globalThis, "fetch", async url => {
       if (new URL(url).hostname === "api.open-meteo.com") return new Promise(() => {});
@@ -125,12 +125,16 @@ test("Budżet zadania — bez modeli i zewnętrznych API", async t => {
     });
     for (const kind of ["tool", "native"]) {
       mode = kind;
-      const request = req(), budget = new TaskBudget(request.signal, { steps: 6, tools: 16, taskMs: 1000, toolMs: 25 });
+      const request = req(), budget = new TaskBudget(request.signal, { steps: 6, tools: 16, taskMs: 1000, toolMs: 25, modelIdleMs: 25 });
       const text = await (await chatResponse(request, body, "offline-only", "test/model", budget)).text();
       const output = events(text), meta = output.find(chunk => chunk.type === "finish").messageMetadata;
-      assert.equal(meta.stopReason, "tool_error"); assert.ok(meta.toolFailures.some(failure => failure.message.includes("źródło nie odpowiada")));
-      if (kind === "native") assert.ok(text.includes("Część odpowiedzi."));
-      else assert.equal(meta.toolCalls, 1);
+      if (kind === "native") {
+        assert.equal(meta.stopReason, "provider_error"); assert.ok(meta.stopMessage.includes("OPENROUTER_IDLE_TIMEOUT"));
+        assert.ok(text.includes("Część odpowiedzi.")); assert.equal(meta.toolFailures, undefined);
+      } else {
+        assert.equal(meta.stopReason, "tool_error"); assert.ok(meta.toolFailures.some(failure => failure.message.includes("źródło nie odpowiada")));
+        assert.equal(meta.toolCalls, 1);
+      }
       assert.ok(meta.durationMs < 1000);
     }
   });
@@ -146,5 +150,102 @@ test("Budżet zadania — bez modeli i zewnętrznych API", async t => {
     const meta = events(text).find(chunk => chunk.type === "finish").messageMetadata;
     assert.equal(calls, 2); assert.equal(meta.stopReason, "provider_error"); assert.equal(meta.modelSteps, 2); assert.equal(meta.toolCalls, 1);
     assert.ok(meta.partialFindings.some(line => line.includes("wynik=5"))); assert.equal(text.includes("provider private details"), false);
+    assert.ok(meta.stopMessage.includes("OPENROUTER_HTTP_503"));
+  });
+
+  await t.test("Model z dostępnym native search odpowiada po 12 s bez limitu narzędzia 10 s", async t => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    t.mock.method(globalThis, "fetch", () => new Promise(resolve => setTimeout(() => resolve(new Response("Gotowe")), 12_000)));
+    const budget = new TaskBudget();
+    budget.beginStep(0, true);
+    try {
+      const pending = boundedModelFetch("https://model.test", {}, budget).then(response => response.text());
+      t.mock.timers.tick(10_001); assert.equal(budget.reason, undefined);
+      t.mock.timers.tick(1999); assert.equal(await pending, "Gotowe");
+      assert.equal(budget.reason, undefined); assert.equal(budget.toolCalls, 0);
+    } finally { budget.dispose(); }
+  });
+
+  await t.test("45 s na pierwsze dane, także gdy nagłówki już dotarły; anulowanie streamu i brak błędu narzędzia", async t => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let cancelled = false;
+    t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({ cancel() { cancelled = true; } })));
+    const budget = new TaskBudget();
+    try {
+      const response = await boundedModelFetch("https://model.test", {}, budget);
+      const pending = assert.rejects(response.text());
+      t.mock.timers.tick(44_999); assert.equal(budget.reason, undefined);
+      t.mock.timers.tick(1); await pending;
+      assert.equal(budget.reason, "provider_error"); assert.ok(budget.message.includes("OPENROUTER_FIRST_TIMEOUT"));
+      assert.equal(cancelled, true); assert.equal(budget.failures.length, 0);
+    } finally { budget.dispose(); }
+  });
+
+  await t.test("Nowy fragment odnawia limit ciszy; pełny stream może trwać ponad 45 s", async t => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let upstream;
+    t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({ start(controller) { upstream = controller; } })));
+    const budget = new TaskBudget();
+    const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve(); };
+    try {
+      const response = await boundedModelFetch("https://model.test", {}, budget);
+      const pending = response.text();
+      t.mock.timers.tick(30_000);
+      upstream.enqueue(new TextEncoder().encode("Pierwsza ")); await flush();
+      t.mock.timers.tick(19_999); assert.equal(budget.reason, undefined);
+      upstream.enqueue(new TextEncoder().encode("druga.")); await flush();
+      t.mock.timers.tick(5000); assert.equal(budget.reason, undefined);
+      upstream.close(); assert.equal(await pending, "Pierwsza druga.");
+      t.mock.timers.tick(5000); assert.equal(budget.reason, undefined);
+    } finally { budget.dispose(); }
+  });
+
+  await t.test("Keep-alive nie wydłuża całego zadania ponad 60 s", async t => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let upstream;
+    t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({ start(controller) { upstream = controller; } })));
+    const budget = new TaskBudget();
+    try {
+      const response = await boundedModelFetch("https://model.test", {}, budget);
+      const pending = assert.rejects(response.text());
+      for (let i = 0; i < 5; i++) {
+        t.mock.timers.tick(10_000); upstream.enqueue(new TextEncoder().encode(": keep-alive\n\n"));
+        for (let n = 0; n < 15; n++) await Promise.resolve();
+      }
+      t.mock.timers.tick(10_000); await pending;
+      assert.equal(budget.reason, "time_limit"); assert.equal(budget.signal.aborted, true);
+    } finally { budget.dispose(); }
+  });
+
+  await t.test("HTTP 401/402/429/502/503 mają bezpieczne kody, bez ponowień i ujawniania body", async t => {
+    for (const status of [401, 402, 429, 502, 503]) {
+      let calls = 0;
+      t.mock.method(globalThis, "fetch", async () => { calls++; return new Response("PRIVATE_PROVIDER_SECRET", { status }); });
+      const output = events(await (await chatResponse(req(), body, "offline-only", "test/model")).text());
+      const meta = output.find(chunk => chunk.type === "finish").messageMetadata;
+      assert.equal(calls, 1); assert.equal(meta.stopReason, "provider_error");
+      assert.ok(meta.stopMessage.includes(`OPENROUTER_HTTP_${status}`));
+      assert.ok(!JSON.stringify(output).includes("PRIVATE_PROVIDER_SECRET"));
+    }
+  });
+
+  await t.test("Błąd połączenia jest odróżniony od błędu narzędzia i nie ujawnia surowej treści", async t => {
+    t.mock.method(globalThis, "fetch", async () => { throw new Error("PRIVATE_NETWORK_DETAILS"); });
+    const output = events(await (await chatResponse(req(), body, "offline-only", "test/model")).text());
+    const meta = output.find(chunk => chunk.type === "finish").messageMetadata;
+    assert.equal(meta.stopReason, "provider_error"); assert.ok(meta.stopMessage.includes("OPENROUTER_CONNECTION"));
+    assert.equal(meta.toolFailures, undefined); assert.ok(!JSON.stringify(output).includes("PRIVATE_NETWORK_DETAILS"));
+  });
+
+  await t.test("Błąd zgłoszony w HTTP 200 podczas streamingu zachowuje tekst i bezpieczny kod", async t => {
+    t.mock.method(globalThis, "fetch", async () => response([
+      { id: "partial", model: "test/model", choices: [{ index: 0, delta: { role: "assistant", content: "Odebrany fragment." }, finish_reason: null }] },
+      { error: { code: 429, message: "PRIVATE_STREAM_ERROR" } },
+    ]));
+    const text = await (await chatResponse(req(), body, "offline-only", "test/model")).text();
+    const meta = events(text).find(chunk => chunk.type === "finish").messageMetadata;
+    assert.equal(meta.stopReason, "provider_error"); assert.ok(text.includes("Odebrany fragment."));
+    assert.ok(meta.stopMessage.includes("OPENROUTER_HTTP_429"));
+    assert.ok(!text.includes("PRIVATE_STREAM_ERROR"));
   });
 });

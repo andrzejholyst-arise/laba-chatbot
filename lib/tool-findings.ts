@@ -15,6 +15,13 @@ export function toolFinding(name: string, value: unknown): string | null {
   if (o.ok === false) return `Błąd (${name}): ${s("message", 350) || s("error", 350) || "nie uzyskano danych."}`;
   let result = "";
   switch (name) {
+    case "zapiszProfil":
+      if (o.ok === true) {
+        const saved = object(o.zapamietano);
+        const prefs = object(saved.preferences);
+        result = `Zapamiętano: ${[typeof saved.name === "string" ? `imię ${text(saved.name, 60)}` : "", ...Object.entries(prefs).map(([key, value]) => `${text(key, 50)}: ${text(value, 100)}`)].filter(Boolean).join("; ")}`;
+      }
+      break;
     case "aktualnyCzas": case "czas":
       if (s("date") && s("time") && s("timeZone")) result = `${s("date")} ${s("time")} (${s("timeZone")})`;
       break;

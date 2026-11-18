@@ -20,6 +20,7 @@ export function AgentLimit({ message }: { message: ChatMessage }) {
     <p role="status">{message.metadata.stopMessage || (message.metadata.stepLimitReached ? `Zatrzymałem się po ${message.metadata.stepLimit ?? message.metadata.stepsCompleted ?? "maksymalnej liczbie"} krokach` : "Zadanie zakończono z wynikiem częściowym.")}</p>
     {!!message.metadata.toolFailures?.length && <><h3>Nie udało się sprawdzić</h3><ul>{message.metadata.toolFailures.map((failure, index) => <li key={index}>{failure.tool}: {failure.message}</li>)}</ul></>}
     {message.metadata.stopReason === "cancelled" ? (findings.length > 0 && <><h3>Dotychczasowe wyniki</h3><ul>{findings.map((finding, index) => <li key={index}>{finding}</li>)}</ul></>) : findings.length ? <><h3>Dotychczasowe wyniki</h3><ul>{findings.map((finding, index) => <li key={index}>{finding}</li>)}</ul></>
+      : message.metadata.stopReason === "provider_error" ? <p>Odpowiedź nie została ukończona. Spróbuj wysłać wiadomość ponownie.</p>
       : <p>Nie uzyskano potwierdzonych wyników narzędzi. Doprecyzuj zadanie lub spróbuj ponownie.</p>}
   </section>;
 }

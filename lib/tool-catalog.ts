@@ -6,9 +6,12 @@ export const toolLabels: Record<string, string> = {
   dlugoscDnia: "🌅 długość dnia",
   pogoda: "🌤️ pogoda", waluty: "💱 waluty", swieta: "📅 święta", wikipedia: "📖 Wikipedia",
   kalkulator: "🧮 kalkulator", czas: "🕒 czas", notatki: "📝 notatki", diagnostyka: "⚙️ diagnostyka",
+  zapiszProfil: "🧠 zapamiętywanie profilu",
 };
 export const AGENT_STEP_LIMIT = 6;
 
 export const AGENT_TOOL_LIMIT = 16;
 export const AGENT_TASK_TIMEOUT_MS = 60_000;
 export const AGENT_TOOL_TIMEOUT_MS = 10_000;
+export const AGENT_MODEL_FIRST_TIMEOUT_MS = 45_000;
+export const AGENT_MODEL_IDLE_TIMEOUT_MS = 20_000;

@@ -161,7 +161,192 @@ Po zapisaniu konfiguracji uruchom ponownie serwer (`Ctrl+C`, potem `npm run dev`
 i otwórz adres podany w terminalu, zwykle http://localhost:3000.
 Bez konfiguracji wysłanie wiadomości pokaże komunikat o brakujących zmiennych.
 Pierwszą prawdziwą wiadomość wyślij samodzielnie w przeglądarce; może naliczyć
-opłatę w OpenRouter. Historia istnieje tylko w bieżącej karcie i znika po odświeżeniu.
+opłatę w OpenRouter. Ukończone rozmowy są zapisywane w Supabase i wczytywane
+po odświeżeniu w tej samej sesji logowania.
+
+## Pamięć właściciela w `user_profiles`
+
+`preferences.ulubiony_kolor` przechowuje ulubiony kolor, a
+`preferences.preferowany_czas_kontaktu` jedną z wartości: `do południa`,
+`po południu`, `wieczorem`. Deklaracje i odpowiedzi bez polskich znaków są
+obsługiwane; czas normalizujemy do tych trzech wartości. Przykład:
+„Moj ulubiony kolor to zielony. Preferuje kontakt po poludniu”. Agent dopytuje
+o brakujące preferencje po jednej, bez ponawiania tego samego pytania w rozmowie.
+Krótkie „zielony” lub „po poludniu” zapisuje tylko jako odpowiedź bezpośrednio
+po odpowiednim pytaniu agenta w historii rozmowy. Znane preferencje trafiają
+do instrukcji przed każdą odpowiedzią i są używane przy doborze kolorystyki
+oraz propozycjach kontaktu. Oba pola są zawsze dostępne na `/profile`, również
+przed pierwszym zapisem. Nowy SQL nie jest potrzebny.
+
+Strona `/profile` po sprawdzeniu sesji pokazuje imię i preferencje. Każdą
+wartość można poprawić lub usunąć, a „Wyczyść cały profil” po potwierdzeniu
+ustawia `name = null` i `preferences = {}` w tym samym wierszu. Historia rozmów
+pozostaje. Edycja korzysta z istniejących uprawnień `select, insert, update`;
+nie wymaga nowego SQL. API `/api/profile` sprawdza sesję przed odczytem danych
+i body, a przy zmianach także źródło żądania. Aktualizacja po id i poprzednich
+wartościach chroni równoległe zapisy: konflikt zwraca 409 z prośbą o odświeżenie.
+Pusta nowa rozmowa pobiera świeże imię z tego API i wita po imieniu; bez imienia
+pyta, jak się zwracać do użytkownika. Powitanie nie tworzy wiadomości w bazie
+ani nie wywołuje modelu.
+
+W lekcji 7 aplikacja ma jednego właściciela. `supabase/user-profile.sql`
+tworzy brakującą tabelę lub uzupełnia `name` i `preferences`, zachowując dane.
+Unikalny indeks na stałej dopuszcza najwyżej jeden wiersz; jeśli jest ich więcej,
+skrypt zatrzyma się bez usuwania profili. RLS jest włączony, bez polityk,
+z uprawnieniami wyłącznie dla `service_role`.
+
+`zapiszProfil` zapisuje imię do `name`, a bezpieczne deklaracje do
+`preferences` jako pary nazwa–wartość. Funkcja SQL `save_studio_profile`
+aktualizuje istniejący wiersz albo tworzy pierwszy, łącząc JSON przez `||`.
+Nowy fakt zachowuje pozostałe; zmiana tego samego klucza zastępuje jego wartość.
+Blokada w transakcji chroni przed utratą równoległych dopisków.
+
+Przed pierwszym i każdym kolejnym krokiem modelu serwer sprawdza sesję
+i odczytuje profil. Dane są filtrowane, serializowane jako JSON i oznaczane
+w instrukcji jako informacje o użytkowniku, nigdy polecenia. Profil jest
+wspólny dla właściciela także po ponownym logowaniu; rozmowy nadal mają
+dotychczasowe oddzielenie według sesji. Błąd odczytu jest jawny i nie udaje
+pustej pamięci. Nie zmienia to trybu analizy wiadomości klientów.
+
+Serwer dopuszcza narzędzie tylko dla jednoznacznych deklaracji w aktualnej
+wiadomości. Imię rozpoznaje także bez polskich znaków („Mam na imie Andrzej”,
+„Nazywam sie Andrzej”) oraz przy dodatkowych odstępach.
+Przykłady deklaracji: „Mam na imię Jan”, „Mieszkam w Krakowie”, „Moje ulubione
+jedzenie to sushi” i „Wolę krótkie odpowiedzi”. Obsługiwane są również napój,
+kolor, hobby, język i preferowana pora konsultacji. Nie wnioskujemy o faktach
+z planów, żartów, pytań, cytatów, wcześniejszych wiadomości ani źródeł.
+Przy niejednoznacznej wiadomości zapis jest pomijany. Sekrety i dane wrażliwe
+są blokowane, a wartości wywołania muszą odpowiadać deklaracji; model nie może
+dopisać zgadywanego miasta. Nazwy miast zachowują podaną odmianę. Po sukcesie
+narzędzie zwraca wyłącznie zapisane pola, które agent krótko potwierdza.
+
+Miejsce zamieszkania (miejscowość, bez dokładnego adresu) trafia do `miasto`,
+ulubiona potrawa do `ulubione_jedzenie`, a styl do `styl_odpowiedzi`.
+Przykład: „Prosze zapamietaj: Mieszkam w Lodzi, moja ulubiona potrawa to zurek
+i wole dlugie odpowiedzi”. Akceptowane są też „miejsce zamieszkania: Łódź”,
+„ulubiona potrawa: żurek” i „styl_odpowiedzi: krótko”. Polskie znaki w słowach
+deklaracji są opcjonalne; nazwy miejsc i potraw zachowują podaną pisownię.
+Styl zapisujemy jako `krotko`, `dlugo` lub `szczegolowo`. Odczyt obsługuje też
+istniejące wartości `krótko`, `długo` i `szczegółowo`. Styl ustala długość
+odpowiedzi, chyba że bieżąca wiadomość wyraźnie prosi o inną długość.
+Potwierdzenie zapisu pozostaje krótkie. Zmiana stylu zachowuje imię i resztę
+preferencji. Nie wymaga nowych kolumn ani skryptu SQL.
+
+Przy takiej deklaracji pierwszy krok ma wymuszone
+`toolChoice: {type: "tool", toolName: "zapiszProfil"}`. Model nie może wybrać
+zwykłej odpowiedzi zamiast zapisu. Po wykonaniu narzędzia profil jest ponownie
+odczytywany, a dalsze kroki mają `toolChoice: "auto"` i nie mogą zapisywać
+ponownie tej samej deklaracji. Jeśli dostawca pominie wymagane narzędzie,
+interfejs pokazuje błąd zamiast traktować odpowiedź jako potwierdzenie zapisu.
+
+Testy offline: `npm run test:profile`. W przeglądarce podaj imię, miasto,
+ulubione jedzenie i styl odpowiedzi. W Table Editor potwierdź jeden wiersz
+oraz dopisywanie pól. Odśwież stronę, wybierz „Nowa rozmowa” i zapytaj o swoje
+imię oraz miasto. Następnie zmień miasto: pozostałe pola powinny zostać.
+Sprawdź też „Planuję mieszkać w Poznaniu” i „Żartuję, mam na imię Batman” —
+profil nie powinien się zmienić. Do prób z hasłem używaj wyłącznie fikcyjnego
+tekstu: ta blokada dotyczy pamięci profilu, a historia rozmów zapisuje tekst.
+
+## Trwałe rozmowy w Supabase
+
+Zainstalowano `@supabase/supabase-js`. Jedyny klient bazy znajduje się
+w `lib/supabase.ts`, zabezpieczonym przez `server-only`. Ustaw prywatnie na
+serwerze `SUPABASE_URL` oraz `SUPABASE_SECRET_KEY` (klucz serwerowy, bez
+prefiksu `NEXT_PUBLIC_`). Po zmianie konfiguracji uruchom serwer ponownie;
+na Vercel dodaj zmienne projektu i wykonaj nowe wdrożenie.
+
+Schemat: `supabase/conversations.sql`. Tabele `conversations` i `messages`
+mają włączone RLS, bez polityk, oraz uprawnienia dla `service_role`.
+Serwer oddziela historię skrótem aktualnej, zweryfikowanej sesji w `session_key`.
+Nie zapisuje cookie w bazie. Odświeżenie zachowuje rozmowę; wygaśnięcie sesji
+lub ponowne logowanie tworzy inną tożsamość i nie udostępnia starej historii.
+
+`GET /api/conversations` sprawdza sesję przed bazą i zwraca ostatnią rozmowę.
+Brak sesji daje 401. Czat czeka na wczytanie historii; błąd odczytu jest jawny
+i można ponowić pobranie. `POST /api/agent` sprawdza sesję, origin i wiadomość,
+następnie otwiera rozmowę i pobiera z bazy zaufaną historię. Pole
+`conversationId` jest UUID z kolumny `conversations.client_id`; bez niego
+serwer nadaje nowy UUID. W bazie `conversations.id`, `messages.id` oraz
+`messages.conversation_id` mają typ `bigint`. Identyfikatory `id` nadaje baza,
+a klucz obcy wiadomości wskazuje liczbowe `conversations.id`. Serwer odczytuje
+bigint jako tekst przez `id::text`, żeby JavaScript nie zaokrąglał dużych liczb.
+
+Pierwsza wiadomość tworzy rozmowę z tytułem tymczasowym. Po ukończeniu
+odpowiedzi callback `onEnd` strumienia SDK zapisuje użytkownika i agenta
+w jednej operacji, w tej kolejności. Stałe identyfikatory UUID obu wiadomości
+w `messages.client_id`, indeksy UNIQUE na `client_id` obu tabel i `upsert`
+z pomijaniem konfliktów po `client_id` chronią przed duplikatami. Powtórzenie
+zapisanej tury odtwarza odpowiedź bez ponownego wywołania modelu. Kolejność
+odczytu określa `position`, nie sam czas utworzenia.
+
+W bazie pozostaje tylko tekst; załączone i wygenerowane obrazy zastępuje
+`[obraz]`. Pliki, base64, audio, wyniki narzędzi i prywatne rozumowanie nie są
+zapisywane. Błąd modelu, przerwanie, limit kroków lub błąd narzędzia nie
+zapisuje nieukończonej pary wiadomości. Błąd zapisu nie usuwa odpowiedzi
+z ekranu, lecz pokazuje informację, że może zniknąć po odświeżeniu.
+
+„Nowa rozmowa” czyści widok i nadaje nowy identyfikator; rekord powstaje dopiero
+po wysłaniu pierwszej wiadomości. Poprzednich rozmów nie usuwa.
+
+### Historia rozmów `/history`
+
+Link „Historia” w czacie otwiera chronioną stronę z tytułem, datą utworzenia
+i liczbą wiadomości każdej rozmowy bieżącej sesji. Najnowsze rozmowy są
+na górze; po 50 wpisach można wczytać starsze. Liczniki nie pobierają treści
+wiadomości i obejmują wszystkie strony wyników API. Lista ma stany ładowania,
+błędu i pustej historii, przycisk odświeżania i „Nowa rozmowa”.
+
+`GET /api/conversations?list=1&offset=0` zwraca listę, a `?id=<client_id>`
+wiadomości wybranej rozmowy. Oba warianty sprawdzają sesję przed bazą
+i filtrują po `session_key`. Cudza lub nieistniejąca rozmowa daje 404,
+błędne parametry 400, brak sesji 401. Nie wymagają dodatkowych tabel ani kolumn.
+
+Kliknięcie wpisu otwiera `/?conversation=<client_id>`. Ten identyfikator
+pozostaje w adresie, więc F5 odtwarza wskazaną rozmowę, również starszą.
+Nowe wiadomości nadal są wysyłane z jej `conversationId`. `/?new=1`
+zawsze otwiera pusty czat; po ukończeniu pierwszej odpowiedzi adres zmienia się
+na identyfikator nowej rozmowy. Nowa rozmowa bez pierwszej wiadomości
+pozostaje pusta także po F5 i nie tworzy rekordu w bazie.
+
+Sprawdzenie: utwórz rozmowy A i B, otwórz A z historii, naciśnij F5 i dopisz
+wiadomość. Historia powinna pokazać dodatkową parę tylko przy A. Otwórz B
+i potwierdź brak treści A. Bez sesji `/history` przekierowuje do logowania.
+
+Po zapisaniu pierwszej ukończonej odpowiedzi osobne, krótkie wywołanie
+tego samego modelu przez `generateText` nadaje nowej rozmowie tytuł w stylu
+Studio Nova. Tytuł ma 3–5 słów, co sprawdza serwer. Nie generujemy go ponownie
+przy kontynuacji ani odtworzeniu zapisanej tury. To dodatkowe wywołanie modelu
+z limitem 15 sekund w ramach czasu całego zadania; nie ma narzędzi,
+automatycznych ponowień ani obrazów. Wywołanie nie narzuca `temperature`
+ani ustawień `reasoning`, żeby działało także z modelami ograniczającymi
+te parametry. Limit odpowiedzi wynosi 1024 tokeny, aby 80-tokenowy limit
+nie ucinał wyjścia modeli rozumujących. Nadal zapisujemy tylko tytuł 3–5 słów.
+Błędy tytułu rozróżniają format, ucięcie, timeout, dostęp do modelu i zapis bazy;
+nie ujawniają surowej odpowiedzi dostawcy ani sekretów.
+Błąd modelu, walidacji lub zapisu tytułu zachowuje wiadomości i tymczasowy
+tytuł „Nowa rozmowa Studio Nova”, a czat pokazuje informację o problemie.
+Istniejące wcześniej rozmowy zachowują swoje tytuły.
+
+Przycisk „Usuń” wymaga potwierdzenia. `DELETE /api/conversations?id=<UUID>`
+sprawdza sesję, origin i identyfikator, po czym wywołuje funkcję
+`delete_studio_conversation` ze skrótem zweryfikowanej sesji. Jednorazowo
+wykonaj `supabase/delete-conversation.sql` w SQL Editor: funkcja działa
+w jednej transakcji i usuwa wiadomości oraz ich rozmowę. W razie błędu
+całość jest wycofywana. Dostęp ma wyłącznie `service_role`; cudza rozmowa
+daje 404. Anulowanie potwierdzenia nie wysyła żądania. Pusta historia zachęca
+do przygotowania pierwszej odpowiedzi dla klienta głosem Studio Nova.
+
+Testy offline: `npm run test:persistence` (prawdziwe SDK i klient Supabase,
+atrapy HTTP, bez sekretów i połączeń z rzeczywistą bazą). Sprawdzają zapis
+pełnej pary, kolejność, ponowienie, odczyt po odświeżeniu, oddzielenie sesji,
+nową rozmowę, błędy zapisu/odczytu/modelu i zastępowanie obrazów.
+
+W przeglądarce: wyślij wiadomość i poczekaj na koniec odpowiedzi, odśwież
+stronę i sprawdź odtworzoną parę. W Table Editor potwierdź dwa rekordy
+w `messages` dla jednej rozmowy. Kliknij „Nowa rozmowa”, wyślij nowy tekst
+i odśwież; poprzednie rekordy mają pozostać w bazie. Załącz zdjęcie i sprawdź,
+że po odświeżeniu widać `[obraz]`. Po wylogowaniu otwarcie
+`/api/conversations` ma zwrócić 401.
 
 ---
 
@@ -698,11 +883,11 @@ Liczba kroków oznacza rozpoczęte generacje modelu; liczba narzędzi oznacza rz
 
 Każde narzędzie ma własny abort i wyścig z timerem 10 s, obejmujący także kilka zapytań API (np. geokodowanie i prognozę) oraz odbiór całego body. Po przekroczeniu zwraca dokładny komunikat „źródło nie odpowiada”. Dotyczy także generowania obrazu i głosu; wolniejsza generacja nie jest automatycznie ponawiana. Dodatkowo klienty publicznych API, obrazu i głosu mają własne timeouty 10 s. Globalny timer i abort kończą zadanie najpóźniej po 60 s nawet wtedy, gdy promise dostawcy nie reaguje na sygnał. Limit wykonania funkcji hostingu wynosi 65 s wyłącznie dla domknięcia streamu z wynikiem i metadanymi; nie wydłuża pracy modelu ani narzędzi ponad 60 s. Przycisk generowania obrazu korzysta ze wspólnego czasu zadania zamiast wcześniejszego timera 55 s.
 
-Native search jest wykonywany wewnątrz OpenRouter. Provider 3.1.0 nie udostępnia osobnego początku wyszukiwania ani liczby wewnętrznych zapytań Google. Liczymy jedną obserwowalną operację wyszukiwania na krok (na podstawie cytowań lub jawnego wywołania), bez dublowania za kolejne źródła. Przed generacją z włączonym native search rezerwujemy jeden slot budżetu, aby późno przesłane cytowania nie przekroczyły 16 wykonań łącznie z narzędziami lokalnymi. W skrajnym przypadku zadanie może zakończyć się przy 15 narzędziach lokalnych i niewykorzystanej rezerwacji; interfejs nadal pokazuje faktycznie obserwowaną liczbę. To limit operacji aplikacji, nie niewidocznych zapytań wewnętrznych dostawcy. Ponieważ wyszukiwanie stanowi część żądania modelu, całe żądanie z włączonym native search (również zwykła odpowiedź takiego kroku) ma konserwatywny limit 10 s, łącznie ze streamem.
+Native search jest wykonywany wewnątrz OpenRouter. Provider 3.1.0 nie udostępnia osobnego początku wyszukiwania ani liczby wewnętrznych zapytań Google. Liczymy jedną obserwowalną operację wyszukiwania na krok (na podstawie cytowań lub jawnego wywołania), bez dublowania za kolejne źródła. Przed generacją z włączonym native search rezerwujemy jeden slot budżetu, aby późno przesłane cytowania nie przekroczyły 16 wykonań łącznie z narzędziami lokalnymi. W skrajnym przypadku zadanie może zakończyć się przy 15 narzędziach lokalnych i niewykorzystanej rezerwacji; interfejs nadal pokazuje faktycznie obserwowaną liczbę. To limit operacji aplikacji, nie niewidocznych zapytań wewnętrznych dostawcy. Model ma osobny limit: 45 s na pierwsze dane (same nagłówki nie wystarczają), następnie 20 s ciszy między fragmentami. Limit ciszy odnawia się po odebraniu kolejnych danych; cała aktywna odpowiedź może trwać dłużej niż 45 s, ale zawsze obowiązuje 60 s na zadanie. Te same zasady dotyczą kroku z native search i bez niego. Dostępność wyszukiwania nie nakłada limitu narzędzia 10 s na model. Keep-alive nie wydłuża globalnego budżetu.
 
-Zewnętrzny stream UI jest domykany także po przerwaniu lub awarii providera. Nie wykonuje dodatkowego wywołania modelu na podsumowanie. Metadane zawierają przyczynę zatrzymania, błędy, wybrane potwierdzone wyniki oraz `modelSteps`, `toolCalls` i `durationMs`. Czas jest mierzony monotonicznie przez `performance.now()`, od weryfikacji sesji i startu zadania do końca streamu. Pod każdą odpowiedzią jest „Kroki: … · Wywołania narzędzi: … · Czas: … s”. Diagnostyka pokazuje aktualne limity; sekrety nadal wyłącznie jako tak/nie.
+Zewnętrzny stream UI jest domykany także po przerwaniu lub awarii providera. Błędy modelu mają osobne kody: OPENROUTER_FIRST_TIMEOUT (brak pierwszych danych), OPENROUTER_IDLE_TIMEOUT (cisza w streamie), OPENROUTER_CONNECTION (połączenie), OPENROUTER_HTTP_401/402/403/408/429/500/502/503/504 (odrzucenie lub awaria dostawcy) i OPENROUTER_STREAM (pozostały błąd streamu). Przekazujemy wyłącznie stały opis i kod, bez surowych odpowiedzi dostawcy. Nie przypisujemy opóźnienia modelu do błędu narzędzia ani nie sugerujemy doprecyzowania poprawnego pytania. Nie wykonuje dodatkowego wywołania modelu na podsumowanie. Metadane zawierają przyczynę zatrzymania, błędy, wybrane potwierdzone wyniki oraz `modelSteps`, `toolCalls` i `durationMs`. Czas jest mierzony monotonicznie przez `performance.now()`, od weryfikacji sesji i startu zadania do końca streamu. Pod każdą odpowiedzią jest „Kroki: … · Wywołania narzędzi: … · Czas: … s”. Diagnostyka pokazuje aktualne limity; sekrety nadal wyłącznie jako tak/nie.
 
-Testy: `npm run test:budget` sprawdza granice 16/17 wywołań, reset budżetu w nowym zadaniu, rezerwację native, zegary 10/60 s, API ignorujące abort, grupę narzędzi z błędem i blokadę późniejszego zapisu, brak ponowienia, awarię dostawcy po częściowym wyniku i statystyki. Dane i zegary są lokalne, model nie jest wywoływany. Pozostałe zestawy testów chronią wcześniejsze funkcje.
+Testy: `npm run test:budget` sprawdza granice 16/17 wywołań, reset budżetu w nowym zadaniu, rezerwację native, zegary 10/20/45/60 s, wolny start modelu ponad 10 s, odnawianie limitu ciszy, keep-alive, API ignorujące abort, grupę narzędzi z błędem i blokadę późniejszego zapisu, brak ponowienia, awarię dostawcy po częściowym wyniku i statystyki. Dane i zegary są lokalne, model nie jest wywoływany. Pozostałe zestawy testów chronią wcześniejsze funkcje.
 
 W przeglądarce: zapytaj „Oblicz 123 razy 8” i sprawdź liczniki pod odpowiedzią. Potem poproś „Podziel 10 przez zero” — oczekiwany jeden błąd, bez pętli ponowień. Złożone zadanie zachowa wcześniejsze wyniki przy awarii źródła lub wyczerpaniu limitu. Wolne API i dokładne granice czasu najlepiej sprawdzać lokalnymi testami z zegarem, zamiast zużywać wywołania modelu.
 

@@ -11,6 +11,7 @@ import { notesInputSchema, sessionNotes } from "./session-notes";
 import { failure, retrievedAt, validTimeZone } from "./public-api";
 import { AGENT_TOOL_LIMIT, AGENT_TASK_TIMEOUT_MS, AGENT_TOOL_TIMEOUT_MS } from "./tool-catalog";
 import { getAgentStepLimit } from "./agent-config";
+import { profileTool } from "./profile-tool";
 
 export const timeInputSchema = z.strictObject({ strefa: z.string().min(1).max(100).refine(validTimeZone).optional() });
 export function czas(input: z.input<typeof timeInputSchema>) {
@@ -19,8 +20,9 @@ export function czas(input: z.input<typeof timeInputSchema>) {
   const now = new Date();
   return { ok: true as const, ...aktualnyCzas(now, parsed.data.strefa ?? "Europe/Warsaw"), retrievedAt: now.toISOString() };
 }
-export function workshopTools(request: Request, model: string, toolNames: () => string[]) {
+export function workshopTools(request: Request, model: string, toolNames: () => string[], latestUserText = "", previousAssistantText = "") {
   return {
+    zapiszProfil: profileTool(request, latestUserText, previousAssistantText),
     dlugoscDnia: tool({
       description: "Sprawdza w Open-Meteo wschód i zachód słońca oraz długość dnia dla miasta i daty RRRR-MM-DD. Użyj przy pytaniach o długość dnia, wschód/zachód i planowanie uprawy roślin; nie zastępuj tym prognozy zachmurzenia ani oceny światła w mieszkaniu. Dostępne dziś i kolejne 15 dni. Miasto jest geokodowane; opcjonalny kraj to ISO alpha-2 (PL), region doprecyzowuje nazwę. Gdy kilka miejsc pasuje, poproś o kraj/region. Przy względnej dacie użyj czas z właściwą strefą lub poproś o konkretną datę. Godziny wyniku są lokalne, uwzględniają DST; podaj strefę, źródło i czas pobrania. W dzień/noc polarną wyjaśnij brak wschodu/zachodu, nie traktuj null jako północy. Przy ok=false przekaż komunikat, bez zgadywania godzin.",
       inputSchema: daylightInputSchema, execute: (input, { abortSignal }) => dlugoscDnia(input, abortSignal),
