@@ -164,6 +164,111 @@ Pierwszą prawdziwą wiadomość wyślij samodzielnie w przeglądarce; może nal
 opłatę w OpenRouter. Ukończone rozmowy są zapisywane w Supabase i wczytywane
 po odświeżeniu w tej samej sesji logowania.
 
+## Dodawanie dokumentów do bazy wiedzy
+
+### Wyszukiwanie wiedzy w czacie
+
+Narzędzie `searchKnowledge` przyjmuje `question`, tworzy pojedynczy embedding
+przez AI SDK `embed` i ten sam `OPENROUTER_EMBEDDING_MODEL` co import, po czym
+wywołuje istniejące `match_chunks(query_embedding, match_count)` z limitem 3.
+Zwraca `title`, `content`, `similarity` i stabilny `sourceId`, w kolejności podobieństwa.
+Przed embeddingiem i bazą jest sprawdzana sesja. Nie ma osobnego publicznego
+endpointu wyszukiwania; narzędzie działa w chronionym `POST /api/agent`.
+Wspólny limit narzędzia obejmuje embedding i zapytanie do bazy. Błędy są jawne
+i nie są przedstawiane jako pusty wynik.
+
+Pytania o Studio Nova, konsultacje, pakiety, ofertę, cennik i regulamin
+wymagają najpierw `searchKnowledge`. Opis narzędzia obejmuje także inne pytania
+o firmę. Po uruchomieniu wyszukiwania internet i Wikipedia nie są dostępne
+w kolejnych krokach tej tury, a kalkulator ze stałą ceną konsultacji nie jest
+źródłem danych firmowych. Usunięto ceny wpisane na sztywno w instrukcji czatu.
+Odpowiedzi korzystają wyłącznie z fragmentów bieżącego wyszukiwania i kończą
+się linią `📎 Źródło: [tytuł dokumentu]`. Treści i tytuły są niezaufanymi danymi,
+nie poleceniami. Podobieństwo samo w sobie nie potwierdza odpowiedzi.
+Przy braku odpowiedzi agent mówi „Nie mam tej informacji w bazie wiedzy”
+i proponuje, jaki dokument uzupełnić. Nie dopisuje wówczas niepasującego źródła.
+
+Próg podobieństwa jest zapisany wyłącznie w `KNOWLEDGE_SIMILARITY_THRESHOLD`
+w `lib/knowledge-sources.ts`: 0.45. Ustalono go na podstawie 9 rzeczywistych
+prób z modelem `openai/text-embedding-3-small`: najlepsze trafienia pytań
+z odpowiedzią miały 59.8–79.7%, a obce tematy 23.9–33.0%. Tematyczne pułapki
+osiągały nawet 70.3%, dlatego przekroczenie progu nie dowodzi, że dokument
+odpowiada na pytanie. Słabsze fragmenty są odrzucane przed przekazaniem modelowi.
+
+Model wskazuje użyte fragmenty identyfikatorami `[K…]`. Interfejs ukrywa je
+w tekście i pokazuje pod odpowiedzią wyłącznie cytowane, zweryfikowane wyniki:
+tytuł, podobieństwo procentowe oraz „Pokaż fragment” z dokładną treścią.
+Nie pokazuje wszystkich znalezionych dokumentów jako użytych źródeł.
+Przy odpowiedzi częściowej agent rozdziela „Wiem ze źródła” i „W bazie brakuje”.
+Etykieta nad odpowiedzią brzmi „📚 baza wiedzy”.
+
+Wykonaj `supabase/knowledge-message-sources.sql`, aby źródła przetrwały F5:
+kolumna `messages.knowledge_context` przechowuje kopię cytowanych fragmentów
+oraz informację o użyciu narzędzia. Późniejsza zmiana lub usunięcie dokumentu
+nie zmienia tekstu źródła starszej odpowiedzi. Odczyt nadal wymaga sesji.
+
+Sprawdzenie w przeglądarce: zapytaj o cenę podaną w zaimportowanym cenniku,
+następnie o nieopisany rabat albo bieżącą dostępność terminów. Oczekiwane:
+widoczne narzędzie `searchKnowledge`, cytowanie dokumentu przy potwierdzonej
+odpowiedzi i informacja o braku wiedzy przy pułapce. Testy offline:
+`node --test tests/knowledge-search.test.mjs`.
+
+### Import i zarządzanie dokumentami
+
+`/upload` i metody GET/POST/DELETE `/api/knowledge` są dostępne po sprawdzeniu sesji. Endpoint
+sprawdza również źródło żądania i waliduje tytuł oraz treść do 20 000 znaków.
+Przed uruchomieniem aktualnej wersji wykonaj `supabase/manage-knowledge.sql` w SQL
+Editor. Skrypt korzysta z istniejących tabel `documents` i `chunks`, włącza
+RLS i udostępnia operację wyłącznie `service_role`. Funkcja SQL zapisuje tytuł
+oraz wszystkie fragmenty i uzupełnienia starych embeddingów w jednej transakcji;
+błąd fragmentu wycofuje też dokument i uzupełnienia.
+Kod korzysta wyłącznie z serwerowego klienta `lib/supabase.ts`.
+
+Formularz odbiera z serwera etapy „Dzielę tekst…”, „Tworzę embeddingi…” i
+„Zapisuję…” przez strumień NDJSON. Przycisk i pola są zablokowane w trakcie
+operacji, a dodatkowa blokada w ref chroni przed kolejnym wysłaniem przed
+renderem. Błąd wskazuje ostatni rzeczywisty etap i następny krok. Urwany stream
+bez pełnego potwierdzenia nie daje komunikatu sukcesu.
+
+Lista pod formularzem pokazuje nazwę źródła (tytuł), wersję (datę dodania)
+i liczbę fragmentów, bez pobierania treści ani wektorów. Tytuły porównujemy
+bez rozróżniania wielkości liter i skrajnych spacji. Ponowny import wymaga
+potwierdzenia wersji z listy; serwer sprawdza ją przed wywołaniem modelu
+i ponownie w transakcji. Poprzedni dokument i jego fragmenty znikają dopiero
+wraz z udanym importem nowej wersji; błąd przywraca poprzedni stan.
+Przycisk „Usuń” po potwierdzeniu usuwa dokument i fragmenty w jednej transakcji.
+Zmiana wersji w międzyczasie zwraca konflikt 409, zamiast usuwać nowsze dane.
+
+Każdy akapit oddzielony pustą linią jest osobnym fragmentem. Krótkich akapitów
+nie łączymy. Akapity powyżej 800 znaków dzielimy na granicach zdań przez
+`Intl.Segmenter("pl")`. Jeśli pojedyncze zdanie samo przekracza limit, dzielimy
+je na granicy słowa; słowo dłuższe niż 800 znaków dzielimy bez rozcinania par
+UTF-16. Indeksy `chunk_index` zaczynają się od 0.
+
+Przed zapisem pobieramy wszystkie fragmenty z pustym `embedding`, stronami
+po 500 rekordów. Jedno `embedMany` obejmuje nowe fragmenty oraz wszystkie
+odczytane braki poza zastępowanymi fragmentami, które zostaną usunięte;
+używa `OPENROUTER_EMBEDDING_MODEL` z `lib/model.ts`, bez
+ponowień. Wymagamy kompletnej listy skończonych, niezerowych wektorów po
+1536 liczb. Nowy dokument nie istnieje jeszcze w bazie w czasie generowania;
+błąd modelu pozostawia wcześniejsze dane bez zmian i zachowuje formularz.
+Model ma 45 s, a cały import 60 s. Funkcja SQL uzupełnia wyłącznie puste
+embeddingi, sprawdza zgodność treści ze stanem odczytanym przed generowaniem
+i nie potwierdza sukcesu, jeżeli nadal istnieją fragmenty bez embeddingów.
+Równoległa zmiana danych powoduje 40001 i wycofanie transakcji; istniejące
+wektory nie są nadpisywane. Stary skrypt `add-knowledge-document.sql` dotyczy
+poprzedniej wersji importu bez embeddingów.
+
+Test formularza: otwórz „Baza wiedzy” w czacie, wyślij puste pola, potem wklej
+trzy akapity rozdzielone pustymi liniami. Oczekiwany komunikat:
+„Zapisano dokument „[tytuł]”: 3 fragmentów. Wszystkie fragmenty mają embeddingi.”
+W Table Editor sprawdź dokument, kolejne indeksy fragmentów oraz niepuste
+`embedding` w nowych i wcześniejszych fragmentach. Jeśli były braki,
+komunikat podaje liczbę uzupełnionych wcześniejszych fragmentów.
+Następnie dodaj nową treść pod tym samym tytułem, anuluj i potwierdź
+zastąpienie, odśwież stronę i sprawdź wersję oraz liczbę fragmentów. Przetestuj
+także anulowanie i potwierdzenie usunięcia dokumentu.
+
 ## Pamięć właściciela w `user_profiles`
 
 `preferences.ulubiony_kolor` przechowuje ulubiony kolor, a

@@ -15,6 +15,9 @@ export function toolFinding(name: string, value: unknown): string | null {
   if (o.ok === false) return `Błąd (${name}): ${s("message", 350) || s("error", 350) || "nie uzyskano danych."}`;
   let result = "";
   switch (name) {
+    case "searchKnowledge":
+      if (o.ok === true && Array.isArray(o.fragments)) result = `Baza wiedzy: ${o.fragments.length} fragmentów; źródła: ${[...new Set(o.fragments.map(fragment => text(object(fragment).title, 120)))].join(", ")}`;
+      break;
     case "zapiszProfil":
       if (o.ok === true) {
         const saved = object(o.zapamietano);

@@ -31,6 +31,10 @@ export function chatToolSteps(message: ChatMessage): ChatToolStep[] {
     const index = Math.max(1, step);
     if (part.type === "source-url" && !explicitSearchSteps.has(index) && !sourceSteps.has(index)) { add("webSearch"); sourceSteps.add(index); }
   }
+  if (message.metadata?.knowledgeSearched && ![...groups.values()].some(group => group.tools.some(tool => tool.name === "searchKnowledge"))) {
+    if (!groups.has(1)) groups.set(1, { step: 1, tools: [] });
+    groups.get(1)!.tools.unshift({ name: "searchKnowledge", label: toolLabels.searchKnowledge });
+  }
   return [...groups.values()];
 }
 // Zachowujemy pomocniczą płaską listę etykiet dla dotychczasowych integracji.

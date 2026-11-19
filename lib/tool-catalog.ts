@@ -1,5 +1,6 @@
 // Wspólne nazwy dla etykiet UI i sprawdzania historii; bez konfiguracji serwera.
 export const toolLabels: Record<string, string> = {
+  searchKnowledge: "📚 baza wiedzy",
   webSearch: "🔎 wyszukiwanie", aktualnyCzas: "🕒 aktualnyCzas",
   opadyDlaOgrodnika: "🌧️ opady deszczu dla ogrodnika", generujObraz: "🎨 generowanie obrazu",
   policzKosztKonsultacji: "🧮 policzKosztKonsultacji", odpowiedzPoPolsku: "🔊 odpowiedzPoPolsku",

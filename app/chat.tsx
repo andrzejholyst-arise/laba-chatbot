@@ -10,6 +10,8 @@ import PromptDemo from "./prompt-demo";
 import type { DemoCase } from "../lib/demo-evaluation";
 import type { ChatMessage } from "../lib/chat-message";
 import MessageSources from "./message-sources";
+import KnowledgeSources from "./knowledge-sources";
+import { visibleKnowledgeText } from "../lib/knowledge-sources";
 import SpeechResponse from "./speech-response";
 import GeneratedImage from "./generated-image";
 import { AgentLimit, AgentSteps, AgentStats } from "./agent-progress";
@@ -204,6 +206,7 @@ export default function Chat({ demoCases, initialConversationId, startNew = fals
         <button type="button" disabled={busy || leaving} onClick={newConversation}>Nowa rozmowa</button>
         <Link className={styles.navLink} href="/history" prefetch={false}>Historia</Link>
         <Link className={styles.navLink} href="/profile" prefetch={false}>Profil</Link>
+        <Link className={styles.navLink} href="/upload" prefetch={false}>Baza wiedzy</Link>
         <Link className={styles.navLink} href="/dashboard" prefetch={false}>Podróże ↗</Link>
         <button type="button" disabled={leaving || imageBusy} onClick={async () => {
           setLeaving(true);
@@ -261,7 +264,7 @@ export default function Chat({ demoCases, initialConversationId, startNew = fals
               if (part.type === "tool-odpowiedzPoPolsku" && part.state === "output-error") return <p key={index} role="alert" className={styles.error}>Nie udało się przygotować nagrania.</p>;
               if (part.type === "tool-generujObraz" && part.state === "output-available") return <GeneratedImage key={index} output={part.output} id={`${message.id}-${index}`} />;
               if (part.type === "tool-generujObraz" && part.state === "output-error") return <p key={index} role="alert" className={styles.error}>Nie udało się wygenerować obrazu.</p>;
-              if (part.type === "text") return <p key={index}>{part.text}</p>;
+              if (part.type === "text") return <p key={index}>{message.role === "assistant" ? visibleKnowledgeText(part.text) : part.text}</p>;
               if (part.type === "file" && (safeImageDataUrl(part.url, part.mediaType) || (message.metadata?.generatedImage && part.url.startsWith("blob:")))) {
                 return <div key={index}>
                   <img src={part.url} alt={part.filename || "Załączone zdjęcie"}
@@ -276,6 +279,7 @@ export default function Chat({ demoCases, initialConversationId, startNew = fals
             {message.role === "assistant" && (message.metadata?.vision || message.metadata?.generatedImage) &&
               <small className={styles.modelCaption}>Model: {message.metadata.modelId || "API nie podało identyfikatora użytego modelu."}</small>}
             <MessageSources message={message} />
+            <KnowledgeSources message={message} />
             <AgentStats message={message} />
             {message.metadata?.persistenceError && <p className={styles.error} role="alert">{message.metadata.persistenceError}</p>}
             {message.metadata?.titleError && <p className={styles.error} role="alert">{message.metadata.titleError}</p>}

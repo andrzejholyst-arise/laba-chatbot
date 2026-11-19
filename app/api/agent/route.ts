@@ -5,6 +5,7 @@ import { ImageUploadError, readChatBody } from "../../../lib/chat-upload";
 import { analysisRequestSchema } from "../../../lib/analysis";
 import { analyzeMessage, analysisError } from "../../../lib/analyze-message";
 import { chatResponse } from "../../../lib/agent-chat";
+import { chatModelId } from "../../../lib/model";
 
 // Czas pracy wynosi 60 s; zapas hostingu służy tylko domknięciu streamu.
 export const maxDuration = 65;
@@ -38,7 +39,7 @@ export async function POST(request: Request) {
     return fail("invalid_request", error instanceof ImageUploadError ? error.message : "Nieprawidłowy format żądania.", error instanceof ImageUploadError ? error.status : 400);
   }
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
-  const model = process.env.OPENROUTER_MODEL?.trim();
+  const model = chatModelId();
   if (!apiKey || !model) return fail("missing_configuration", "Brak konfiguracji: ustaw OPENROUTER_API_KEY i OPENROUTER_MODEL na serwerze i uruchom ponownie aplikację lub wykonaj ponowne wdrożenie.", 503);
   if (body.mode === "chat") return chatResponse(request, body, apiKey, model, budget);
 

@@ -8,7 +8,7 @@ test("Historia Supabase: prawdziwy klient i SDK, wyłącznie atrapy HTTP", async
   const { POST } = await app("app/api/agent/route.ts");
   const { GET, DELETE } = await app("app/api/conversations/route.ts");
   const { createSession } = await app("lib/session.ts");
-  const { messageText, prepareConversation, saveConversationTitle } = await app("lib/conversation-store.ts");
+  const { messageText, prepareConversation, saveConversationTitle, saveConversationTurn } = await app("lib/conversation-store.ts");
   const { validConversationTitle } = await app("lib/conversation-title.ts");
   process.env.NODE_ENV = "test";
   process.env.CHAT_PASSWORD = "offline-password";
@@ -98,7 +98,8 @@ test("Historia Supabase: prawdziwy klient i SDK, wyłącznie atrapy HTTP", async
         writes.push(payload);
         assert.ok(Array.isArray(payload));
         assert.deepEqual(payload.map(row => row.role), ["user", "assistant"]);
-        assert.equal(payload[1].content, "Konsultacja trwa 45 minut.");
+        if (payload[1].knowledge_context?.searched) assert.ok(payload[1].content.includes("[K012345abcdef]"));
+        else assert.equal(payload[1].content, "Konsultacja trwa 45 minut.");
         for (const row of payload) {
           assert.match(row.conversation_id, /^\d+$/, "FK musi być bigint, a nie UUID");
           assert.ok(conversations.some(conversation => conversation.id === row.conversation_id));
@@ -474,5 +475,18 @@ test("Historia Supabase: prawdziwy klient i SDK, wyłącznie atrapy HTTP", async
     row.title = "Tytuł zmieniony przez właściciela";
     await saveConversationTitle(request, turn, "Tytuł otrzymany od modelu");
     assert.equal(row.title, "Tytuł zmieniony przez właściciela");
+  });
+  await t.test("Źródła i etykieta wiedzy przetrwają F5 jako dokładny tekst użytej wersji", async () => {
+    const id = randomUUID(), question = user("sources-test", "Jaki jest cennik?");
+    const request = req({ conversationId: id, messages: [question] });
+    const turn = await prepareConversation(request, [question], id);
+    const source = { sourceId: "K012345abcdef", title: "Cennik", content: "Dokładny tekst\nz poprzedniej wersji.", similarity: .75 };
+    const assistant = { id: turn.assistantId, role: "assistant", metadata: { knowledgeSearched: true, knowledgeSources: [source] }, parts: [{ type: "text", text: "Odpowiedź.\n📎 Źródło: Cennik [K012345abcdef]" }] };
+    await saveConversationTurn(request, turn, assistant);
+    const loaded = await (await GET(get(cookie, `?id=${id}`))).json();
+    assert.equal(loaded.messages[1].metadata.knowledgeSearched, true);
+    assert.deepEqual(loaded.messages[1].metadata.knowledgeSources, [source]);
+    assert.deepEqual(messages.find(row => row.client_id === turn.assistantId).knowledge_context.sources, [source]);
+    assert.equal((await GET(get(otherCookie, `?id=${id}`))).status, 404);
   });
 });

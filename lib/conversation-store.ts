@@ -4,6 +4,7 @@ import type { UIMessage } from "ai";
 import { getSupabase } from "./supabase";
 import { sessionFromRequest, validSession } from "./session";
 import type { ConversationHistory } from "./conversation-history";
+import { cleanKnowledgeContext, knowledgeSourcesForMessage } from "./knowledge-sources";
 
 export class ConversationError extends Error {
   constructor(message: string, readonly status = 503, readonly code = "CONVERSATION_ERROR") { super(message); }
@@ -18,7 +19,9 @@ function databaseError(error: { code?: string; message?: string }, status: numbe
     ? error.code : status === 0 ? "DB_CONNECTION" : status === 401 ? "DB_AUTH" : status === 403 ? "DB_PERMISSION" : "DB_QUERY_FAILED";
   let help = "Sprawdź konfigurację Supabase i wykonanie skryptu SQL w tym samym projekcie.";
   if (["42P01", "PGRST205"].includes(code)) help = "Brakuje tabeli conversations lub messages w API. Wykonaj przygotowany skrypt SQL w projekcie wskazanym przez SUPABASE_URL.";
-  else if (["42703", "PGRST204"].includes(code)) help = "Brakuje wymaganej kolumny albo API nie odświeżyło schematu. Sprawdź client_id, session_key, created_at i position oraz wykonanie przygotowanego skryptu SQL.";
+  else if (["42703", "PGRST204"].includes(code)) help = error.message?.includes("knowledge_context")
+    ? "Brakuje kolumny źródeł. Wykonaj supabase/knowledge-message-sources.sql w SQL Editor i odśwież stronę."
+    : "Brakuje wymaganej kolumny albo API nie odświeżyło schematu. Sprawdź client_id, session_key, created_at i position oraz wykonanie przygotowanego skryptu SQL.";
   else if (["42501", "DB_PERMISSION"].includes(code)) help = "Brak uprawnień do tabel. Sprawdź uprawnienia service_role ze skryptu SQL oraz użycie serwerowego SUPABASE_SECRET_KEY.";
   else if (["PGRST301", "PGRST302", "PGRST303", "DB_AUTH"].includes(code)) help = "Supabase odrzucił klucz. Sprawdź, czy SUPABASE_URL i serwerowy SUPABASE_SECRET_KEY pochodzą z tego samego projektu, i uruchom ponownie serwer.";
   else if (code === "DB_CONNECTION") help = "Brak połączenia z Supabase lub przekroczony czas oczekiwania. Sprawdź SUPABASE_URL, sieć i czy projekt Supabase jest aktywny.";
@@ -58,16 +61,17 @@ export function messageText(message: UIMessage) {
   }).join("\n");
 }
 
-type StoredMessage = { client_id: string; role: "user" | "assistant"; content: string };
+type StoredMessage = { client_id: string; role: "user" | "assistant"; content: string; knowledge_context?: unknown };
 function uiMessage(row: StoredMessage): UIMessage {
-  return { id: row.client_id, role: row.role, parts: [{ type: "text", text: row.content }] };
+  const context = cleanKnowledgeContext(row.knowledge_context);
+  return { id: row.client_id, role: row.role, parts: [{ type: "text", text: row.content }], ...(row.role === "assistant" && context.searched ? { metadata: { knowledgeSearched: true, knowledgeSources: context.sources } } : {}) };
 }
 
 async function readMessages(conversationId: string) {
   const db = getSupabase();
   const rows: StoredMessage[] = [];
   for (let offset = 0; ; offset += 500) {
-    const { data, error, status } = await db.from("messages").select("client_id,role,content")
+    const { data, error, status } = await db.from("messages").select("client_id,role,content,knowledge_context")
       .eq("conversation_id", conversationId).order("position", { ascending: true }).range(offset, offset + 499);
     if (error) throw databaseError(error, status, "Nie udało się wczytać wiadomości");
     rows.push(...(data as StoredMessage[]));
@@ -177,14 +181,16 @@ export async function saveConversationTurn(request: Request, turn: ConversationT
   if (error) throw databaseError(error, status, "Nie udało się potwierdzić dostępu do zapisu");
   if (!data) throw new ConversationError("Nie udało się potwierdzić dostępu do zapisu rozmowy.");
   const createdAt = new Date().toISOString();
+  const metadata = assistant.metadata && typeof assistant.metadata === "object" ? assistant.metadata as Record<string, unknown> : {};
+  const knowledge = { searched: metadata.knowledgeSearched === true, sources: knowledgeSourcesForMessage(assistant) };
   // Jedna operacja INSERT dla całej pary: atomowo, użytkownik przed agentem.
   // Konflikt client_id pomija istniejące rekordy, bez nadpisywania odpowiedzi.
   // Baza sama nadaje bigint id; klucz obcy to odczytane id rozmowy, nie UUID.
   const { error: saveError, status: saveStatus } = await db.from("messages").upsert([
     { client_id: messageId(turn.conversationId, turn.user.id, "user"), conversation_id: data.id,
-      created_at: createdAt, role: "user", content: messageText(turn.user) },
+      created_at: createdAt, role: "user", content: messageText(turn.user), knowledge_context: {} },
     { client_id: turn.assistantId, conversation_id: data.id,
-      created_at: createdAt, role: "assistant", content: messageText(assistant) },
+      created_at: createdAt, role: "assistant", content: messageText(assistant), knowledge_context: knowledge.searched ? knowledge : {} },
   ], { onConflict: "client_id", ignoreDuplicates: true, defaultToNull: false });
   if (saveError) throw databaseError(saveError, saveStatus, "Nie udało się zapisać rozmowy; odpowiedź może zniknąć po odświeżeniu");
 }
