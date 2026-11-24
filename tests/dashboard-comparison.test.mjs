@@ -5,12 +5,12 @@ import { loadApp } from "./app-fixture.mjs";
 test("Porównanie miast — dane lokalne i atrapa OpenRouter", async t => {
   const app = await loadApp(t);
   const { POST } = await app("app/api/dashboard/route.ts");
-  const { createSession } = await app("lib/session.ts");
+  const { createTestSession } = await app("lib/auth.ts");
   const { dashboardComparisonResponseSchema } = await app("lib/dashboard-schema.ts");
-  process.env.NODE_ENV = "test"; process.env.CHAT_PASSWORD = "offline-only";
-  process.env.SESSION_SECRET = "comparison-offline-".repeat(4);
+  process.env.NODE_ENV = "test";
+
   process.env.OPENROUTER_API_KEY = "comparison-test-key"; process.env.OPENROUTER_MODEL = "test/model";
-  const cookie = `chat-session=${createSession()}`;
+  const cookie = `chat-session=${createTestSession()}`;
   const date = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Rome" }).format(new Date());
   const query = { mode: "compare", data: date, cities: [{ miasto: "Paryż" }, { miasto: "Rzym" }] };
   const paris = { name: "Paryż", latitude: 48.85, longitude: 2.35, country_code: "FR", timezone: "Europe/Paris", admin1: "Île-de-France" };

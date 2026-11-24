@@ -1,6 +1,7 @@
 import localFont from "next/font/local";
 import type { Metadata } from "next";
 import "./globals.css";
+import SessionGuard from "./session-guard";
 
 const nunito = localFont({
   src: "./fonts/NunitoSans.ttf", display: "swap", variable: "--font-nunito", weight: "200 900",
@@ -16,6 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="pl" suppressHydrationWarning>
       <head><script dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('studio-nova-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;}catch(e){}})();` }} /></head>
       <body className={nunito.variable}>
+        <SessionGuard />
         {children}
       </body>
     </html>

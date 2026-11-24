@@ -1,4 +1,5 @@
-import { validSession, sessionFromRequest, sameOrigin } from "../../../lib/session";
+import { verifiedUser } from "../../../lib/auth";
+import { sameOrigin } from "../../../lib/request-origin";
 import { TaskBudget } from "../../../lib/task-budget";
 import { readChatBody } from "../../../lib/chat-upload";
 import { dashboardApiRequestSchema } from "../../../lib/dashboard-schema";
@@ -10,7 +11,7 @@ export async function POST(request: Request) {
   const headers = { "Cache-Control": "no-store" };
   const fail = (code: string, message: string, status: number, choices?: DashboardFailure["choices"]) => Response.json({ error: { code, message }, ...(choices ? { choices } : {}) }, { status, headers });
   // Pierwsza operacja: sesja, zanim odczytamy body lub uruchomimy źródła i model.
-  if (!validSession(sessionFromRequest(request))) return fail("unauthorized", "Sesja wygasła. Zaloguj się ponownie.", 401);
+  if (!(await verifiedUser(request))) return fail("unauthorized", "Sesja wygasła. Zaloguj się ponownie.", 401);
   if (!sameOrigin(request)) return fail("forbidden", "Niedozwolone źródło żądania.", 403);
   const budget = new TaskBudget(request.signal);
   try {

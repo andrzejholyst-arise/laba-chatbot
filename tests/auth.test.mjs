@@ -6,19 +6,17 @@ import { loadApp } from "./app-fixture.mjs";
 test("Ochrona czatu i logowania — bez .env i bez wywołań modelu", async (t) => {
   // Kompilujemy faktyczny kod do katalogu tymczasowego. Nie ładujemy .env.
   const app = await loadApp(t);
-  const paths = {"session": "lib/session.ts", "login": "app/api/login/route.ts", "logout": "app/api/logout/route.ts", "chat": "app/api/agent/route.ts", "limit": "lib/login-limit.ts", "time": "lib/current-time.ts", "badges": "lib/used-chat-tools.ts", "rain": "lib/garden-rain.ts"};
+  const paths = {"session": "lib/auth.ts", "logout": "app/api/logout/route.ts", "chat": "app/api/agent/route.ts", "time": "lib/current-time.ts", "badges": "lib/used-chat-tools.ts", "rain": "lib/garden-rain.ts"};
   const load = (name) => app(paths[name]);
   const session = await load("session");
-  const login = await load("login");
   const logout = await load("logout");
+  const { sameOrigin } = await app("lib/request-origin.ts");
   const chat = await load("chat");
-  const { limitLogin } = await load("limit");
   const cost = await app("lib/consultation-cost.ts");
   const { AGENT_STEP_LIMIT } = await app("lib/tool-catalog.ts");
   // Wyłącznie sztuczne dane; nigdy nie odczytujemy sekretów użytkownika.
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "warsztat-test-only";
-  process.env.SESSION_SECRET = "test-only-secret-".repeat(4);
+
   process.env.OPENROUTER_API_KEY = "offline-only";
   process.env.OPENROUTER_MODEL = "test/model";
   let externalCalls = 0;
@@ -40,7 +38,7 @@ test("Ochrona czatu i logowania — bez .env i bez wywołań modelu", async (t) 
     };
     assert.equal((await chat.POST(forbiddenBody)).status, 401);
     const user = { id: "u1", role: "user", parts: [{ type: "text", text: "Cześć" }] };
-    const testCookie = `chat-session=${session.createSession()}`;
+    const testCookie = `chat-session=${session.createTestSession()}`;
     for (const body of [
       {}, { mode: "image", prompt: "obraz" }, { mode: "unknown" },
       { mode: "chat", messages: [user], permissions: { send_now: true } },
@@ -57,46 +55,7 @@ test("Ochrona czatu i logowania — bez .env i bez wywołań modelu", async (t) 
     assert.equal(externalCalls, 0);
   });
 
-  await t.test("Brak konfiguracji blokuje logowanie i /api/agent", async () => {
-    process.env.CHAT_PASSWORD = "";
-    assert.equal((await login.POST(req("/api/login", { password: "x" }))).status, 503);
-    assert.equal((await chat.POST(req("/api/agent", {}))).status, 401);
-    assert.throws(() => session.createSession());
-    process.env.CHAT_PASSWORD = "warsztat-test-only";
-    process.env.SESSION_SECRET = "short";
-    assert.equal((await login.POST(req("/api/login", { password: "x" }))).status, 503);
-    assert.equal(session.validSession("anything"), false);
-    process.env.SESSION_SECRET = "test-only-secret-".repeat(4);
-  });
-
-  let cookie;
-  await t.test("Błędne i poprawne hasło, cookie bez hasła", async () => {
-    const bad = await login.POST(req("/api/login", { password: "złe" }));
-    assert.equal(bad.status, 401);
-    assert.equal(bad.headers.has("set-cookie"), false);
-    const good = await login.POST(req("/api/login", { password: "warsztat-test-only" }));
-    assert.equal(good.status, 204);
-    const header = good.headers.get("set-cookie");
-    assert.match(header, /HttpOnly; SameSite=Strict; Max-Age=14400/);
-    cookie = header.split(";")[0];
-    const token = cookie.slice(cookie.indexOf("=") + 1);
-    assert.equal(session.validSession(token), true);
-    assert.ok(!Buffer.from(token.split(".")[0], "base64url").toString().includes("warsztat-test-only"));
-  });
-
-  await t.test("Podpis, termin ważności i rotacja konfiguracji", () => {
-    const now = Date.now();
-    const token = session.createSession(now);
-    assert.equal(session.validSession(token, now), true);
-    assert.equal(session.validSession(`${token}x`, now), false);
-    assert.equal(session.validSession(token, now + 14_400_000), false);
-    process.env.CHAT_PASSWORD = "nowe-testowe";
-    assert.equal(session.validSession(token), false);
-    process.env.CHAT_PASSWORD = "warsztat-test-only";
-    process.env.SESSION_SECRET = "different-test-only-secret".repeat(3);
-    assert.equal(session.validSession(token), false);
-    process.env.SESSION_SECRET = "test-only-secret-".repeat(4);
-  });
+  const cookie = `chat-session=${session.createTestSession()}`;
 
   await t.test("API odmawia bez sesji; poprawna sesja przechodzi do walidacji danych", async () => {
     assert.equal((await chat.POST(req("/api/agent", {}))).status, 401);
@@ -434,60 +393,16 @@ test("Ochrona czatu i logowania — bez .env i bez wywołań modelu", async (t) 
     assert.equal(JSON.stringify(requests[2].messages).includes("FORGED_COST"), false);
   });
 
-  await t.test("Wyjście usuwa cookie; kolejne żądanie bez niego dostaje 401", async () => {
-    const response = await logout.POST(req("/api/logout", {}, cookie));
-    assert.equal(response.status, 204);
-    assert.match(response.headers.get("set-cookie"), /chat-session=;.*Max-Age=0/);
-    assert.equal((await chat.POST(req("/api/agent", {}))).status, 401);
-  });
-
   await t.test("Obce pochodzenie jest odrzucane", async () => {
-    assert.equal((await login.POST(req("/api/login", {}, undefined, "https://other.invalid"))).status, 403);
     assert.equal((await logout.POST(req("/api/logout", {}, cookie, "https://other.invalid"))).status, 403);
     assert.equal((await chat.POST(req("/api/agent", {}, cookie, "https://other.invalid"))).status, 403);
-    assert.equal(session.sameOrigin(new Request("http://0.0.0.0:3000/api/login", {
+    assert.equal(sameOrigin(new Request("http://0.0.0.0:3000/api/agent", {
       headers: { Host: "localhost:3000", Origin: "http://localhost:3000" },
     })), true);
-    assert.equal(session.sameOrigin(new Request("http://0.0.0.0:3000/api/login", {
+    assert.equal(sameOrigin(new Request("http://0.0.0.0:3000/api/agent", {
       headers: { Host: "localhost:3000", Origin: "http://localhost:3001" },
     })), false);
-    assert.equal(session.sameOrigin(new Request("http://localhost/api/login")), false);
+    assert.equal(sameOrigin(new Request("http://localhost/api/agent")), false);
   });
 
-  await t.test("Lokalny limit blokuje także poprawne hasło po wyczerpaniu prób", async () => {
-    for (let i = 0; i < 8; i++) assert.equal((await login.POST(req("/api/login", { password: "złe" }))).status, 401);
-    const response = await login.POST(req("/api/login", { password: "warsztat-test-only" }));
-    assert.equal(response.status, 429);
-    assert.equal(response.headers.get("retry-after"), "60");
-  });
-
-  await t.test("Produkcja: Secure, brak hostingu/reguły/łączności blokuje dostęp", async () => {
-    process.env.NODE_ENV = "production";
-    process.env.VERCEL = "";
-    process.env.VERCEL_URL = "";
-    assert.ok(session.authConfigurationError());
-    assert.equal(await limitLogin(req("/api/login", {})), "unavailable");
-    process.env.VERCEL = "1";
-    process.env.VERCEL_URL = "test.vercel.app";
-    assert.match(session.sessionCookie(session.createSession()), /^__Host-chat-session=.*; Secure$/);
-    assert.match(session.sessionCookie("", true), /Max-Age=0; Secure$/);
-    assert.equal(await limitLogin(req("/api/login", {})), "unavailable");
-    t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 404 }));
-    assert.equal((await login.POST(req("/api/login", { password: "warsztat-test-only" }))).status, 503);
-    t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 429 }));
-    assert.equal((await login.POST(req("/api/login", { password: "warsztat-test-only" }))).status, 429);
-    t.mock.method(globalThis, "fetch", async (url) => {
-      assert.equal(new URL(url).host, "localhost");
-      assert.ok(!url.includes(process.env.VERCEL_URL));
-      return new Response(null, { status: 204 });
-    });
-    const good = await login.POST(req("/api/login", { password: "warsztat-test-only" }, undefined, "https://localhost"));
-    assert.equal(good.status, 204);
-    assert.match(good.headers.get("set-cookie"), /; Secure$/);
-    const token = good.headers.get("set-cookie").split(";")[0];
-    // Żądanie bez sesji nie dociera nawet do zapory ani do modelu.
-    t.mock.method(globalThis, "fetch", async () => { throw new Error("Sieć zabroniona"); });
-    assert.equal((await chat.POST(req("/api/agent", {}))).status, 401);
-    assert.equal((await chat.POST(req("/api/agent", { messages: [] }, token))).status, 400);
-  });
 });

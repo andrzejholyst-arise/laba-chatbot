@@ -6,17 +6,17 @@ import { z } from "zod";
 
 test("Analiza Studio Nova — wyłącznie lokalne dane i atrapa OpenRouter", async (t) => {
   const app = await loadApp(t);
-  const paths = {"analysis": "lib/analysis.ts", "route": "app/api/agent/route.ts", "session": "lib/session.ts", "cases": "lib/demo-cases.ts", "evaluation": "lib/demo-evaluation.ts", "examples": "lib/analysis-examples.ts", "instructions": "lib/analysis-instructions.ts"};
+  const paths = {"analysis": "lib/analysis.ts", "route": "app/api/agent/route.ts", "session": "lib/auth.ts", "cases": "lib/demo-cases.ts", "evaluation": "lib/demo-evaluation.ts", "examples": "lib/analysis-examples.ts", "instructions": "lib/analysis-instructions.ts"};
   const load = (name) => app(paths[name]);
   const { analysisSchema } = await load("analysis");
   const { POST } = await load("route");
   const session = await load("session");
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "test-only";
-  process.env.SESSION_SECRET = "test-only-secret-".repeat(4);
+
+  process.env.SUPABASE_SECRET_KEY = "private-db-key-test-only";
   process.env.OPENROUTER_API_KEY = "offline-only";
   process.env.OPENROUTER_MODEL = "test/model:free";
-  const cookie = `chat-session=${session.createSession()}`;
+  const cookie = `chat-session=${session.createTestSession()}`;
   const valid = { category: "sales", priority: "normal", draft: "Konsultacja trwa 45 minut i kosztuje 150 zł brutto.", needs_review: false };
   let output = valid;
   let rawContent;
@@ -136,8 +136,7 @@ test("Analiza Studio Nova — wyłącznie lokalne dane i atrapa OpenRouter", asy
       // Sekrety testowe służą sesji/transportowi; nie są treścią kontekstu modelu.
       const modelContext = JSON.stringify(lastRequest.messages);
       assert.equal(modelContext.includes(process.env.OPENROUTER_API_KEY), false);
-      assert.equal(modelContext.includes(process.env.SESSION_SECRET), false);
-      assert.equal(modelContext.includes(process.env.CHAT_PASSWORD), false);
+      assert.equal(modelContext.includes(process.env.SUPABASE_SECRET_KEY), false);
     }
   });
 

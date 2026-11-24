@@ -7,12 +7,12 @@ test("Budżet zadania — bez modeli i zewnętrznych API", async t => {
   const { TaskBudget, boundedModelFetch } = await app("lib/task-budget.ts");
   const { chatResponse } = await app("lib/agent-chat.ts");
   const { sessionNotes } = await app("lib/session-notes.ts");
-  const { createSession } = await app("lib/session.ts");
-  process.env.NODE_ENV = "test"; process.env.CHAT_PASSWORD = "offline-only";
-  process.env.SESSION_SECRET = "offline-secret-".repeat(4);
+  const { createTestSession } = await app("lib/auth.ts");
+  process.env.NODE_ENV = "test";
+
   process.env.OPENROUTER_API_KEY = "offline-only"; process.env.OPENROUTER_MODEL = "test/model";
   t.mock.method(globalThis, "fetch", async () => { throw new Error("Sieć wyłączona"); });
-  const req = () => new Request("http://localhost/api/agent", { method: "POST", headers: { Cookie: `chat-session=${createSession()}` } });
+  const req = () => new Request("http://localhost/api/agent", { method: "POST", headers: { Cookie: `chat-session=${createTestSession()}` } });
   const body = { messages: [{ id: "q", role: "user", parts: [{ type: "text", text: "Zadanie testowe." }] }] };
   const events = value => value.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
   const response = chunks => new Response(chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "Content-Type": "text/event-stream" } });
@@ -86,7 +86,7 @@ test("Budżet zadania — bez modeli i zewnętrznych API", async t => {
     assert.equal(modelCalls, 1); assert.equal(meta.stopReason, "tool_error"); assert.equal(meta.toolCalls, 2);
     assert.equal(meta.modelSteps, 1); assert.ok(meta.partialFindings.some(line => line.includes("wynik=5")));
     assert.match(meta.toolFailures[0].message, /dzielić przez zero/); assert.ok(meta.blockedToolCallIds.includes("later"));
-    assert.equal(sessionNotes(request)({ operacja: "pokaz" }).notatki.length, 0);
+    assert.equal((await sessionNotes(request)({ operacja: "pokaz" })).notatki.length, 0);
     assert.ok(meta.durationMs >= 0 && Number.isFinite(meta.durationMs));
     assert.equal(output.some(chunk => chunk.type === "error"), false);
   });

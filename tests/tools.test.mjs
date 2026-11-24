@@ -7,18 +7,19 @@ test("Osiem narzędzi — wyłącznie lokalne dane i atrapa dostawcy", async t =
   const weather = await app("lib/weather.ts"), currency = await app("lib/currency.ts"), holidays = await app("lib/holidays.ts"), wiki = await app("lib/wikipedia.ts");
   const calc = await app("lib/calculator.ts"), workshop = await app("lib/workshop-tools.ts"), notes = await app("lib/session-notes.ts");
   const { aktualnyCzas } = await app("lib/current-time.ts");
-  const { createSession } = await app("lib/session.ts");
+  const { createTestSession } = await app("lib/auth.ts");
   const { POST } = await app("app/api/agent/route.ts");
   const { toolLabels, AGENT_STEP_LIMIT } = await app("lib/tool-catalog.ts");
   const { usedChatTools } = await app("lib/used-chat-tools.ts");
   const { messageSources } = await app("lib/message-sources.ts");
   const { publicJson } = await app("lib/public-api.ts");
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "test-only-password";
-  process.env.SESSION_SECRET = "test-only-session-secret-".repeat(4);
+
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://project.supabase.co";
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_test_only";
   process.env.OPENROUTER_API_KEY = "test-only-api-key";
   process.env.OPENROUTER_MODEL = "test/chat";
-  const cookie = `chat-session=${createSession()}`;
+  const cookie = `chat-session=${createTestSession()}`;
   const req = (messages, auth = cookie, extra = {}) => new Request("http://localhost/api/agent", { method: "POST",
     headers: { Host: "localhost", Origin: "http://localhost", "Content-Type": "application/json", ...(auth ? { Cookie: auth } : {}) },
     body: JSON.stringify({ mode: "chat", messages, ...extra }) });
@@ -148,18 +149,18 @@ test("Osiem narzędzi — wyłącznie lokalne dane i atrapa dostawcy", async t =
     assert.equal(aktualnyCzas(new Date("2026-07-01T22:30:00Z")).time, "00:30:00");
   });
 
-  await t.test("Notatki: zapis, odczyt, izolacja sesji, ścisły schemat, limit i wygaśnięcie", t => {
+  await t.test("Notatki: zapis, odczyt, izolacja sesji, ścisły schemat, limit i wygaśnięcie", async t => {
     const first = notes.sessionNotes(req([user]));
-    const second = notes.sessionNotes(req([user], `chat-session=${createSession()}`));
-    assert.equal(first({ operacja: "pokaz" }).notatki.length, 0);
-    assert.equal(first({ operacja: "zapisz", tresc: "Podlać bananowca." }).ok, true);
-    assert.equal(notes.sessionNotes(req([user]))({ operacja: "pokaz" }).notatki[0].tresc, "Podlać bananowca.");
-    assert.equal(second({ operacja: "pokaz" }).notatki.length, 0);
-    for (const input of [{ operacja: "zapisz" }, { operacja: "zapisz", tresc: "" }, { operacja: "zapisz", tresc: "x".repeat(1001) }, { operacja: "pokaz", sessionId: "other" }, { operacja: "pokaz", tresc: "ignored" }]) assert.equal(first(input).ok, false);
-    for (let i = 1; i < 50; i++) assert.equal(first({ operacja: "zapisz", tresc: String(i) }).ok, true);
-    assert.equal(first({ operacja: "zapisz", tresc: "51" }).ok, false);
+    const second = notes.sessionNotes(req([user], `chat-session=${createTestSession()}`));
+    assert.equal((await first({ operacja: "pokaz" })).notatki.length, 0);
+    assert.equal((await first({ operacja: "zapisz", tresc: "Podlać bananowca." })).ok, true);
+    assert.equal((await notes.sessionNotes(req([user]))({ operacja: "pokaz" })).notatki[0].tresc, "Podlać bananowca.");
+    assert.equal((await second({ operacja: "pokaz" })).notatki.length, 0);
+    for (const input of [{ operacja: "zapisz" }, { operacja: "zapisz", tresc: "" }, { operacja: "zapisz", tresc: "x".repeat(1001) }, { operacja: "pokaz", sessionId: "other" }, { operacja: "pokaz", tresc: "ignored" }]) assert.equal((await first(input)).ok, false);
+    for (let i = 1; i < 50; i++) assert.equal((await first({ operacja: "zapisz", tresc: String(i) })).ok, true);
+    assert.equal((await first({ operacja: "zapisz", tresc: "51" })).ok, false);
     const now = Date.now(); t.mock.method(Date, "now", () => now + 14_400_001);
-    assert.equal(first({ operacja: "pokaz" }).ok, false);
+    assert.equal((await first({ operacja: "pokaz" })).ok, false);
   });
 
   await t.test("Źródła i etykiety wszystkich narzędzi; odrzucenie fałszywego hosta", () => {

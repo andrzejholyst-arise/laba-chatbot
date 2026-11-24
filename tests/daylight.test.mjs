@@ -8,10 +8,9 @@ test("Długość dnia — lokalne dane, bez wywołań modelu", async t => {
   const { usedChatTools } = await app("lib/used-chat-tools.ts");
   const { messageSources } = await app("lib/message-sources.ts");
   const { POST } = await app("app/api/agent/route.ts");
-  const { createSession } = await app("lib/session.ts");
+  const { createTestSession } = await app("lib/auth.ts");
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "offline-password";
-  process.env.SESSION_SECRET = "offline-session-secret-".repeat(4);
+
   process.env.OPENROUTER_API_KEY = "offline-api-key";
   process.env.OPENROUTER_MODEL = "test/chat";
   const date = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -125,7 +124,7 @@ test("Długość dnia — lokalne dane, bez wywołań modelu", async t => {
       return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     });
     const response = await POST(new Request("http://localhost/api/agent", { method: "POST", headers: {
-      Host: "localhost", Origin: "http://localhost", Cookie: `chat-session=${createSession()}`, "Content-Type": "application/json",
+      Host: "localhost", Origin: "http://localhost", Cookie: `chat-session=${createTestSession()}`, "Content-Type": "application/json",
     }, body: JSON.stringify({ mode: "chat", messages: [{ id: "q", role: "user", parts: [{ type: "text", text: "Sprawdź długość dnia w Krakowie." }] }] }) }));
     const text = await response.text();
     const events = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));

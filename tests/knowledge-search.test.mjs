@@ -9,16 +9,15 @@ test("searchKnowledge — rzeczywiste AI SDK i Supabase z atrapami HTTP", async 
   const { isCompanyQuestion } = await app("lib/knowledge-intent.ts");
   const { visibleKnowledgeText, KNOWLEDGE_SIMILARITY_THRESHOLD } = await app("lib/knowledge-sources.ts");
   const { POST } = await app("app/api/agent/route.ts");
-  const { createSession } = await app("lib/session.ts");
+  const { createTestSession } = await app("lib/auth.ts");
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "test-search-password";
-  process.env.SESSION_SECRET = "test-search-session-".repeat(4);
+
   process.env.OPENROUTER_API_KEY = "test-search-key";
   process.env.OPENROUTER_MODEL = "test/chat";
   process.env.OPENROUTER_EMBEDDING_MODEL = "test/embedding";
   process.env.SUPABASE_URL = "https://knowledge-search.test";
   process.env.SUPABASE_SECRET_KEY = "test-search-database-key";
-  const cookie = `chat-session=${createSession()}`;
+  const cookie = `chat-session=${createTestSession()}`;
   const req = question => new Request("http://localhost/api/agent", { method: "POST", headers: { host: "localhost", origin: "http://localhost", cookie, "content-type": "application/json" }, body: JSON.stringify({ mode: "chat", conversationId: randomUUID(), messages: [{ id: randomUUID(), role: "user", parts: [{ type: "text", text: question }] }] }) });
   let embeddingCalls = 0, databaseCalls = 0, failEmbedding = false, failDatabase = false, dimensions = 1536, ignoreTool = false;
   let rows = [{ title: "FAQ", content: "Spotkania odbywają się online.", similarity: .6 }, { title: "Cennik", content: "Konsultacja kosztuje 490 zł brutto.", similarity: .9 }, { title: "Regulamin", content: "Reklamacje zgłaszaj mailowo.", similarity: .5 }];

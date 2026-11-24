@@ -8,18 +8,17 @@ test("Import dokumentów z embeddingami i uzupełnianiem braków", async t => {
   const { POST, GET, DELETE } = await app("app/api/knowledge/route.ts");
   const { readKnowledgeImport } = await app("lib/knowledge-stream.ts");
   const { addKnowledgeDocument } = await app("lib/knowledge-store.ts");
-  const { createSession } = await app("lib/session.ts");
+  const { createTestSession } = await app("lib/auth.ts");
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "knowledge-test-password";
-  process.env.SESSION_SECRET = "knowledge-test-session-".repeat(4);
+
   process.env.SUPABASE_URL = "https://knowledge.test";
   process.env.SUPABASE_SECRET_KEY = "knowledge-test-key";
   process.env.OPENROUTER_API_KEY = "knowledge-test-model-key";
   process.env.OPENROUTER_EMBEDDING_MODEL = "test/embedding";
-  const cookie = `chat-session=${createSession()}`;
+  const cookie = `chat-session=${createTestSession()}`;
   let calls = 0, failure, override, embeddingFailure = false, vectorMode = "valid", readFailure = false;
   const payloads = [], modelRequests = [], pendingRows = [], documentsRows = [];
-  let deleteConflict = false;
+  let deleteConflict = false, hiddenDocument = false;
   const request = (body, origin = "http://localhost") => new Request("http://localhost/api/knowledge", {
     method: "POST", headers: { host: "localhost", origin, cookie, "content-type": "application/json" }, body: JSON.stringify(body),
   });
@@ -37,6 +36,7 @@ test("Import dokumentów z embeddingami i uzupełnianiem braków", async t => {
     }
     assert.equal(url.hostname, "knowledge.test");
     if (url.pathname === "/rest/v1/rpc/list_knowledge_documents") return Response.json(documentsRows);
+    if (url.pathname === "/rest/v1/documents") return Response.json(hiddenDocument ? [] : [{ id: url.searchParams.get("id").slice(3) }]);
     if (url.pathname === "/rest/v1/rpc/delete_knowledge_document") return deleteConflict ? Response.json({ code: "40001", message: "PRIVATE_CONFLICT" }, { status: 400 }) : Response.json(true);
     if (url.pathname === "/rest/v1/chunks") {
       assert.equal(init.method, "GET"); assert.equal(init.cache, "no-store");
@@ -108,7 +108,7 @@ test("Import dokumentów z embeddingami i uzupełnianiem braków", async t => {
       const result = await POST(request({ title: "FAQ", content: "Tekst." }));
       assert.equal(result.status, 503); assert.equal(calls, before + 4);
       const body = await result.text(); assert.ok(!body.includes("PRIVATE_DB_DETAILS"));
-      if (code === "PGRST202") assert.ok(body.includes("manage-knowledge.sql"));
+      if (code === "PGRST202") assert.ok(body.includes("knowledge-per-user.sql"));
     }
     failure = undefined;
   });
@@ -185,7 +185,13 @@ test("Import dokumentów z embeddingami i uzupełnianiem braków", async t => {
     assert.equal((await DELETE(request(expectedVersions[0]))).status, 204);
     deleteConflict = true;
     assert.equal((await DELETE(request(expectedVersions[0]))).status, 409);
-    deleteConflict = false; documentsRows.splice(0);
+    deleteConflict = false;
+    // Dokument innej osoby jest dla RLS niewidoczny: „Nie znaleziono.”, bez wywołania funkcji SQL.
+    hiddenDocument = true;
+    const hidden = await DELETE(request(expectedVersions[0]));
+    assert.equal(hidden.status, 404);
+    assert.equal((await hidden.json()).error.message, "Nie znaleziono.");
+    hiddenDocument = false; documentsRows.splice(0);
   });
   await t.test("Strumień pokazuje faktyczne etapy, a błąd embeddingów nie wysyła zakończenia sukcesem", async () => {
     const req = request({ title: "Nowy", content: "Treść dokumentu." }); req.headers.set("accept", "application/x-ndjson");

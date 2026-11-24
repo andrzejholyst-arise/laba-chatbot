@@ -7,20 +7,19 @@ test("Głos po polsku — lokalne odpowiedzi dostawcy, bez prawdziwego API", asy
   const { preparePolishSpeech, polishSpeechTool } = await app("lib/polish-speech.ts");
   const { speechInputSchema, speechResultSchema, MAX_SPEECH_BYTES } = await app("lib/speech-result.ts");
   const { POST } = await app("app/api/agent/route.ts");
-  const { createSession } = await app("lib/session.ts");
+  const { createTestSession } = await app("lib/auth.ts");
   const { speechConfig, imageModelId } = await app("lib/model-config.ts");
   process.env.OPENROUTER_SPEECH_MODEL = "";
   process.env.OPENROUTER_SPEECH_VOICE = "";
   process.env.OPENROUTER_IMAGE_MODEL = "";
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "test-only";
-  process.env.SESSION_SECRET = "offline-test-secret-".repeat(4);
+
   process.env.OPENROUTER_API_KEY = "offline-only";
   process.env.OPENROUTER_MODEL = "test/chat";
   t.mock.method(globalThis, "fetch", async () => { throw new Error("Brak sieci w testach"); });
   const req = (extra = {}, authenticated = true) => new Request("http://localhost/api/agent", {
     method: "POST", headers: { "Content-Type": "application/json", Origin: "http://localhost", Host: "localhost",
-      ...(authenticated ? { Cookie: `chat-session=${createSession()}` } : {}) },
+      ...(authenticated ? { Cookie: `chat-session=${createTestSession()}` } : {}) },
     body: JSON.stringify({ mode: "chat", messages: [{ id: "u1", role: "user", parts: [{ type: "text", text: "Ile kosztuje konsultacja?" }] }], ...extra }),
   });
   const bytes = Buffer.from([73, 68, 51, 4, 0, 0, 0]);

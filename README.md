@@ -61,62 +61,44 @@ projektu i wykonaj nowe wdrożenie. Nadal obowiązują osobne limity 16 wywoła�
 narzędzi oraz 60 sekund na zadanie. Diagnostyka i komunikat zatrzymania
 pokazują skonfigurowany limit.
 
-### Hasło warsztatowe i sesja
+### Konta Supabase Auth
 
-W `.env.local` ustaw `CHAT_PASSWORD` na własne hasło warsztatowe.
-`SESSION_SECRET` został lokalnie wygenerowany kryptograficznie (48 losowych bajtów)
-i dopisany do `.env.local` bez odczytywania poprzedniej zawartości ani wypisywania
-wartości. Nie zastępuj go pustym polem z `.env.example`.
-Po zmianie konfiguracji uruchom ponownie serwer.
+Integracja korzysta z [oficjalnej instrukcji Supabase dla Next.js](https://supabase.com/docs/guides/auth/server-side/nextjs).
 
-Sesja trwa 4 godziny; podpis HMAC-SHA256 i termin ważności są sprawdzane
-na serwerze, również przed każdym `/api/agent`. Cookie ma HttpOnly,
-SameSite=Strict i w produkcji Secure oraz prefiks `__Host-`.
-Cookie zawiera termin i losowy identyfikator, bez hasła.
-Brak hasła lub sekret krótszy niż 32 bajty blokuje dostęp.
-Zmiana hasła albo sekretu unieważnia wszystkie wcześniejsze sesje.
-„Wyjdź” usuwa cookie z przeglądarki i czyści widok rozmowy.
-Sesje są bezstanowe: kopia wcześniej skradzionego cookie pozostaje ważna do
-wygaśnięcia lub zmiany hasła/sekretu; bez wspólnego magazynu nie prowadzimy listy unieważnień.
+Logowanie i rejestracja e-mail/hasło są dostępne na `/login`. Hasło ma minimum 8 znaków.
+Ustaw `NEXT_PUBLIC_SUPABASE_URL` i `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+z tego samego projektu Supabase co serwerowa baza. Adres znajdziesz w Project Settings → API,
+a klucz publishable w API Keys. Przeglądarka otrzymuje wyłącznie klucz publishable.
+`SUPABASE_SECRET_KEY` nadal służy wyłącznie serwerowi do operacji na danych.
+Nie kopiuj go do zmiennych publicznych. Po zmianie konfiguracji uruchom serwer ponownie;
+na hostingu wykonaj nowy build.
 
-### Ograniczenie prób na Vercel
+W Supabase → Authentication → Providers włącz Email. W URL Configuration ustaw
+Site URL na adres aplikacji i dodaj do Redirect URLs adres `/auth/callback`
+z odpowiednią domeną (lokalnie `http://localhost:3000/auth/callback`).
+Jeśli Confirm email jest włączone, po rejestracji najpierw potwierdź adres linkiem
+z wiadomości; dopiero wtedy otworzy się czat. Wyłączone potwierdzanie pozwala
+przejść do czatu od razu. Ustaw również minimalną długość hasła na 8 w konfiguracji Auth.
 
-Lokalnie obowiązuje 10 prób logowania na minutę łącznie w procesie.
-Restart procesu zeruje ten licznik. Nie jest to globalna ochrona hostingu.
+`proxy.ts` odświeża sesję przez `getClaims()`. Każdy endpoint dodatkowo weryfikuje
+użytkownika przez serwerowe `getUser()`, przed odczytem danych lub wywołaniem modelu.
+„Wyloguj” wywołuje Supabase Auth i usuwa ciasteczka sesji. Mechanizm wspólnego
+hasła został usunięty. Limity prób logowania obsługuje teraz Supabase Auth.
 
-W produkcji kod zawsze używa `@vercel/firewall`, bez lokalnego fallbacku.
-W projekcie Vercel otwórz Firewall → Configure → New Rule. Utwórz regułę
-z warunkiem `@vercel/firewall`, Rate limit ID `workshop-login`, limitem
-10 żądań na 60 sekund i odpowiedzią 429. Zapisz i opublikuj regułę.
-Nie dodawaj warunku ścieżki `/api/login`: reguła SDK jest sprawdzana przez
-wewnętrzny endpoint zapory. Klucz `workshop-login` współdzieli limit między
-wszystkimi próbami i instancjami w danym regionie, niezależnie od IP.
-Vercel liczy limity osobno w regionach; nie deklarujemy jednego globalnego
-limitu dla całego świata. Próg reguły można zmienić w panelu.
-
-Na Vercel ustaw te same cztery zmienne z `.env.example` w ustawieniach projektu
-(sekret wygeneruj odrębnie lokalnie lub przenieś prywatnie, nigdy przez rozmowę).
-Standardowe zmienne systemowe Vercel muszą być dostępne. Zapytanie do zapory
-używa domeny aktualnego żądania, a nie chronionego adresu `VERCEL_URL`.
-Brak reguły, timeout
-lub błąd zapory blokuje logowanie komunikatem 503. Inny hosting jest blokowany,
-dopóki nie zostanie dodany właściwy współdzielony limiter.
-W środowisku Preview zapora SDK może wymagać konfiguracji Protection Bypass
-for Automation zgodnie z dokumentacją Vercel.
-
-Dokumentacja: [Vercel Rate Limiting SDK](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting-sdk).
+Zapis rozmów nadal używa dotychczasowego `session_key`, wyliczanego z ciasteczka
+zakresu historii. To ciasteczko samo nie uprawnia do żadnego endpointu ani strony.
+Podział danych według konta nie jest jeszcze wdrożony: profile i baza wiedzy pozostają
+wspólne, a historia zachowuje zakres przeglądarki. Zmiana konta w tej samej przeglądarce
+nie stanowi jeszcze izolacji danych. Rozdzielenie danych wymaga osobnego kroku.
 
 ### Sprawdzenia
 
-`npm run test:auth` sprawdza poprawne i błędne hasło, podpis/wygaśnięcie sesji,
-wyjście, odmowę `/api/agent`, źródło żądania, limit i bezpieczną odmowę przy
-brakującej konfiguracji. Testy mają sztuczne sekrety i blokują połączenia sieciowe.
-`npx tsc --noEmit` sprawdza TypeScript.
-
-Ręcznie w przeglądarce sprawdź błędne hasło, poprawne hasło, odświeżenie,
-„Wyjdź” i ponowne żądanie hasła. Na Vercel dodatkowo sprawdź cookie Secure
-oraz 429 po przekroczeniu limitu i 503 przy wyłączonej regule.
-Wysłanie prawdziwej wiadomości do modelu wykonaj samodzielnie.
+`node --test tests/*.test.mjs` uruchamia testy, w tym rzeczywistego klienta SSR
+z kontrolowaną atrapą HTTP Supabase Auth. Testy nie korzystają z `.env.local`.
+`npm run build` sprawdza TypeScript i kompilację Next.js.
+W przeglądarce sprawdź rejestrację, błędne hasło, odświeżenie strony, e-mail
+w nagłówku, „Wyloguj” oraz przekierowania `/history`, `/profile`, `/upload`.
+`POST /api/agent` bez ciasteczek musi zwracać 401.
 
 ### Publikacja we własnym GitHub i Vercel
 
@@ -128,16 +110,13 @@ Sekrety wpisuj wyłącznie lokalnie albo w panelu Vercel; nie dodawaj ich do Git
 W Vercel wybierz Add New → Project i zaimportuj swoje repozytorium.
 Framework: Next.js, katalog: główny, Node.js: 22.x,
 komenda budowania: `npm run build`, katalog wyjściowy: domyślny.
-W ustawieniach Environment Variables dodaj tylko prywatnie wartości:
-`OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `CHAT_PASSWORD`, `SESSION_SECRET`.
-Zmiana zmiennych wymaga nowego wdrożenia. Skonfiguruj też opisaną wyżej
-regułę zapory `workshop-login`; bez niej logowanie jest blokowane.
+W ustawieniach Environment Variables dodaj prywatnie wartości z `.env.example`,
+w tym oba publiczne ustawienia Supabase Auth i oba serwerowe ustawienia bazy.
+Ustaw również adres wdrożenia oraz `/auth/callback` w konfiguracji Auth Supabase.
+Zmiana zmiennych wymaga nowego wdrożenia.
+Po wdrożeniu sprawdź w oknie prywatnym rejestrację, logowanie, odświeżenie i wylogowanie.
+`POST /api/agent` bez sesji musi zwrócić 401, bez wywołania modelu.
 
-Po wdrożeniu sprawdź opublikowany adres w oknie prywatnym: ekran hasła,
-błędne hasło, poprawne hasło, odświeżenie i wyjście.
-`POST /api/agent` bez cookie musi zwrócić 401, bez wywołania modelu.
-Potwierdź HttpOnly, SameSite=Strict i Secure w cookie oraz działanie limitu.
-Dopiero potem wykonaj samodzielnie próbę rozmowy z modelem (możliwa opłata).
 Publikację uznajemy za zakończoną po tych sprawdzeniach na działającym linku.
 
 ### Konfiguracja modelu
@@ -944,7 +923,7 @@ W `lib/workshop-tools.ts` agent dostaje `pogoda`, `waluty`, `swieta`, `wikipedia
 | `kalkulator` | `dzialanie`: `dodaj`, `odejmij`, `pomnoz`, `podziel`, `potega`; osobne liczby `a`, `b` od −1e12 do 1e12 | Lokalny kod serwera, bez `eval`, wykonywania kodu lub interpretera wyrażeń. Liczby IEEE 754, wynik ograniczony bezpiecznym zakresem; cena konsultacji nadal przez firmowy kalkulator |
 | `czas` | Opcjonalna `strefa`, np. `Europe/Warsaw`, `Asia/Tokyo`, `UTC`; data, dzień tygodnia i godzina, domyślnie Warszawa | Zegar serwera i [Intl.DateTimeFormat](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/DateTimeFormat/DateTimeFormat), walidacja strefy i obsługa czasu letniego |
 | `notatki` | `operacja=zapisz` i `tresc` 1–1000 znaków lub samo `operacja=pokaz` | Mapa w pamięci procesu serwera, oddzielona hashem zweryfikowanego cookie sesji; model i przeglądarka nie wybierają zakresu |
-| `diagnostyka` | Bez argumentów; skonfigurowany identyfikator modelu, faktyczna lista narzędzi, limit kroków i flagi `tak`/`nie` dla wymaganych zmiennych | Jawna lista: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `CHAT_PASSWORD`, `SESSION_SECRET`. Brak wartości sekretów, cookies i instrukcji systemowej. Identyfikator modelu to konfiguracja, nie potwierdzenie modelu faktycznie wybranego przez routing dostawcy |
+| `diagnostyka` | Bez argumentów; skonfigurowany identyfikator modelu, faktyczna lista narzędzi, limit kroków i flagi `tak`/`nie` dla wymaganych zmiennych | Jawna lista: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. Brak wartości sekretów, cookies i instrukcji systemowej. Identyfikator modelu to konfiguracja, nie potwierdzenie modelu faktycznie wybranego przez routing dostawcy |
 
 Nowe narzędzia zwracają `retrievedAt` jako pełną datę i godzinę UTC ISO 8601. Źródła z API pojawiają się w czacie z własnym czasem pobrania (wyświetlanym w strefie Warszawy), a wywołania mają etykiety w kolejności wykonania. Narzędzia zwracają tylko wybrane pola. Przy błędzie zwracają `ok=false`, polski komunikat i godzinę sprawdzenia, bez częściowego wyniku udającego sukces.
 

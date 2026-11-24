@@ -6,19 +6,18 @@ import { loadApp } from "./app-fixture.mjs";
 test("Profil jednego właściciela — SDK i klient Supabase, tylko atrapy HTTP", async t => {
   const app = await loadApp(t, { profile: true });
   const { POST } = await app("app/api/agent/route.ts");
-  const { createSession } = await app("lib/session.ts");
-  const { declaredProfile, hasDeclaredProfile, cleanProfile, profileInstructions, profileQuestions } = await app("lib/profile-rules.ts");
+  const { createTestSession } = await app("lib/auth.ts");
+  const { declaredProfile, hasDeclaredProfile, cleanProfile, profileInstructions, profileQuestions, onboardingMessage, isEmptyProfile } = await app("lib/profile-rules.ts");
   const { profileTool } = await app("lib/profile-tool.ts");
   const { loadUserProfile, saveUserProfile } = await app("lib/user-profile.ts");
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "test-only-password";
-  process.env.SESSION_SECRET = "test-only-profile-secret-".repeat(4);
+
   process.env.OPENROUTER_API_KEY = "test-only-api-key";
   process.env.OPENROUTER_MODEL = "test/model";
   process.env.SUPABASE_URL = "https://profile.test";
   process.env.SUPABASE_SECRET_KEY = "test-only-supabase-key";
-  const cookie = `chat-session=${createSession()}`;
-  const otherCookie = `chat-session=${createSession()}`;
+  const cookie = `chat-session=${createTestSession()}`;
+  const otherCookie = `chat-session=${createTestSession()}`;
   const rows = [{ name: "Anna", preferences: { language: "pl", response_detail: "krotko", stary_fakt: "pozostaje" } }];
   const modelRequests = [], writes = [];
   let reads = 0, externalCalls = 0, nextTool, failRead = false, failWrite = false;
@@ -53,23 +52,31 @@ test("Profil jednego właściciela — SDK i klient Supabase, tylko atrapy HTTP"
     }
     assert.equal(url.hostname, "profile.test");
     assert.equal(init.cache, "no-store");
-    if (url.pathname === "/rest/v1/user_profiles") {
+    assert.equal(url.pathname, "/rest/v1/user_profiles");
+    assert.ok(new Headers(init.headers).get("x-test-user"), "Profil czytamy klientem zalogowanej osoby");
+    if (init.method === "GET") {
       reads++;
-      assert.equal(init.method, "GET");
-      assert.equal(url.searchParams.get("select"), "name,preferences");
-      assert.equal(url.searchParams.has("id"), false);
+      assert.match(url.searchParams.get("select"), /^(id::text,)?name,preferences$/);
       if (failRead) return Response.json({ code: "offline", message: "RAW_PROFILE_SECRET" }, { status: 503 });
-      return Response.json(rows);
+      return Response.json(rows.map(row => ({ id: "1", ...row })));
     }
-    assert.equal(url.pathname, "/rest/v1/rpc/save_studio_profile");
-    const args = JSON.parse(init.body); writes.push(args);
-    assert.deepEqual(Object.keys(args).sort(), ["p_name", "p_preferences"]);
+    // Zapis zwykłymi zapytaniami (RLS), bez funkcji SQL: PATCH istniejącego wiersza albo INSERT.
+    const body = JSON.parse(init.body);
+    assert.equal(Object.hasOwn(body, "user_id"), false, "user_id wypełnia baza");
     if (failWrite) return Response.json(writeFailure, { status: 503 });
+    if (init.method === "PATCH") {
+      assert.equal(url.searchParams.get("id"), "eq.1");
+      writes.push({ p_name: body.name === rows[0].name ? null : body.name, p_preferences: body.preferences });
+      if (resultOverride !== undefined) return Response.json(resultOverride);
+      Object.assign(rows[0], body);
+      return Response.json([{ name: rows[0].name, preferences: rows[0].preferences }]);
+    }
+    assert.equal(init.method, "POST");
+    assert.equal(rows.length, 0, "Drugi wiersz tej osoby jest zabroniony");
+    writes.push({ p_name: body.name, p_preferences: body.preferences });
     if (resultOverride !== undefined) return Response.json(resultOverride);
-    if (!rows.length) rows.push({ name: null, preferences: {} });
-    if (args.p_name !== null) rows[0].name = args.p_name;
-    Object.assign(rows[0].preferences, args.p_preferences);
-    return Response.json(rows);
+    rows.push({ name: body.name, preferences: body.preferences });
+    return Response.json([{ name: body.name, preferences: body.preferences }], { status: 201 });
   });
 
   await t.test("Bez sesji nie ma odczytu, zapisu, modelu ani odczytu body", async () => {
@@ -191,6 +198,44 @@ test("Profil jednego właściciela — SDK i klient Supabase, tylko atrapy HTTP"
     assert.equal(rows[0].name, "Jan");
   });
 
+  await t.test("Pierwsze wejście: powitanie ma jedno zdanie o pomocy i dwa pytania; odpowiedzi to imię i kolor", () => {
+    assert.match(onboardingMessage, /^Dzień dobry! Jestem asystentem Studio Nova i pomagam [^.?!]+\. Jak masz na imię\? Jaki jest Twój ulubiony kolor\?$/);
+    const answer = text => declaredProfile(text, onboardingMessage);
+    assert.deepEqual(answer("Anna"), { name: "Anna", preferences: {} });
+    assert.deepEqual(answer("Anna, niebieski"), { name: "Anna", preferences: { ulubiony_kolor: "niebieski" } });
+    assert.deepEqual(answer("Anna i granatowy"), { name: "Anna", preferences: { ulubiony_kolor: "granatowy" } });
+    assert.deepEqual(answer("Mam na imię Zuzanna, ulubiony kolor to zielony"), { name: "Zuzanna", preferences: { ulubiony_kolor: "zielony" } });
+    assert.deepEqual(answer("niebieski"), { name: null, preferences: { ulubiony_kolor: "niebieski" } });
+    assert.deepEqual(answer("Jestem Piotr"), { name: "Piotr", preferences: {} });
+    // Zwykłe pytania i polecenia nie są imieniem, a bez powitania nic nie jest zgadywane.
+    for (const text of ["Nowy temat", "Cześć", "Ile kosztuje konsultacja?", "Pomóż mi", "anna", "Napisz ofertę, niebieski", "Cześć, niebieski", "Jestem głodny", "Anna, bo tak"]) {
+      assert.equal(hasDeclaredProfile(answer(text)), false, text);
+    }
+    assert.equal(hasDeclaredProfile(declaredProfile("Anna", "Cześć! W czym pomóc?")), false);
+    assert.equal(isEmptyProfile({ name: null, preferences: {} }), true);
+    assert.equal(isEmptyProfile({ name: "Anna", preferences: {} }), false);
+    assert.equal(isEmptyProfile({ name: null, preferences: { ulubiony_kolor: "zielony" } }), false);
+    assert.match(profileInstructions({ name: null, preferences: {} }, [onboardingMessage], true), /pierwsza rozmowa z nową osobą/);
+    assert.ok(!profileInstructions({ name: "Anna", preferences: {} }, [onboardingMessage], true).includes(profileQuestions.preferowany_czas_kontaktu));
+  });
+  await t.test("Pierwsza wiadomość pustego profilu zapisuje imię i kolor tej osoby, a potem nie jest już traktowana jak odpowiedź", async () => {
+    rows.splice(0);
+    process.env.TEST_FIRST_TURN = "1";
+    try {
+      const before = writes.length;
+      const plain = await send("Nowy temat", undefined);
+      assert.equal(plain.response.status, 200);
+      assert.equal(writes.length, before);
+      assert.equal(rows.length, 0);
+      const first = await send("Anna, niebieski", undefined);
+      assert.equal(first.output.find(event => event.type === "tool-output-available").output.ok, true);
+      assert.deepEqual(rows[0], { name: "Anna", preferences: { ulubiony_kolor: "niebieski" } });
+      // Profil nie jest już pusty: kolejna nowa rozmowa nie przyjmuje krótkiej odpowiedzi jak imienia.
+      const again = await send("Marek", undefined);
+      assert.equal(again.output.some(event => event.type === "tool-input-available"), false);
+      assert.equal(rows[0].name, "Anna");
+    } finally { delete process.env.TEST_FIRST_TURN; }
+  });
   await t.test("Brak profilu nie tworzy wiersza przy odczycie; pierwszy i kolejny zapis nadal dają jeden wiersz", async () => {
     rows.splice(0);
     assert.deepEqual(await loadUserProfile(req("Test")), { name: null, preferences: {} });
@@ -293,7 +338,7 @@ test("Profil jednego właściciela — SDK i klient Supabase, tylko atrapy HTTP"
       const before = writes.length;
       const { output } = await send(text);
       assert.equal(writes.length, before + 1);
-      assert.deepEqual(writes.at(-1).p_preferences, expected);
+      for (const [key, value] of Object.entries(expected)) assert.deepEqual(writes.at(-1).p_preferences[key], value);
       assert.equal(output.find(event => event.type === "tool-output-available").output.ok, true);
       assert.equal(rows.length, 1);
       assert.equal(rows[0].name, "Andrzej");
@@ -349,7 +394,7 @@ test("Profil jednego właściciela — SDK i klient Supabase, tylko atrapy HTTP"
       const { output } = await send(text);
       assert.equal(output.find(event => event.type === "tool-output-available").output.ok, true);
       assert.equal(writes.length, before + 1);
-      assert.deepEqual(writes.at(-1).p_preferences, expected);
+      for (const [key, value] of Object.entries(expected)) assert.deepEqual(writes.at(-1).p_preferences[key], value);
       assert.equal(rows.length, 1); assert.equal(rows[0].name, "Andrzej");
       assert.equal(rows[0].preferences.miasto, "Gdansk");
     }

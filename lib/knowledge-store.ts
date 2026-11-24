@@ -1,6 +1,7 @@
 import "server-only";
-import { getSupabase } from "./supabase";
-import { sessionFromRequest, validSession } from "./session";
+import { userDb } from "./user-db";
+import { verifiedUser } from "./auth";
+
 import { knowledgeImportSchema, splitDocument, type KnowledgeSummary, type KnowledgeVersion, type ImportStage } from "./knowledge-document";
 import { embedMany } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
@@ -10,20 +11,21 @@ export class KnowledgeError extends Error {
   constructor(message: string, readonly status = 503) { super(message); }
 }
 
-function requireSession(request: Request) {
-  if (!validSession(sessionFromRequest(request))) throw new KnowledgeError("Sesja wygasła. Zaloguj się ponownie.", 401);
+// Baza wiedzy jest osobna dla każdej osoby: klient z jej sesją, RLS pilnuje user_id.
+async function requireSession(request: Request) {
+  if (!(await verifiedUser(request))) throw new KnowledgeError("Sesja wygasła. Zaloguj się ponownie.", 401);
+  return userDb(request);
 }
 
 function databaseError(code?: string): never {
-  if (["PGRST202", "42883"].includes(code ?? "")) throw new KnowledgeError("Baza wymaga aktualizacji. Wykonaj skrypt supabase/manage-knowledge.sql, a potem odśwież listę dokumentów.");
+  if (["PGRST202", "42883"].includes(code ?? "")) throw new KnowledgeError("Baza wymaga aktualizacji. Wykonaj skrypt supabase/knowledge-per-user.sql, a potem odśwież listę dokumentów.");
   if (code === "40001" || code === "P0001") throw new KnowledgeError("Dokumenty zmieniły się lub zastąpienie wymaga potwierdzenia. Odśwież listę i ponów operację.", 409);
   throw new KnowledgeError("Nie udało się potwierdzić operacji w bazie. Odśwież listę dokumentów przed ponowną próbą.");
 }
 
 export async function listKnowledgeDocuments(request: Request): Promise<KnowledgeSummary[]> {
-  requireSession(request);
+  const db = await requireSession(request);
   const items: KnowledgeSummary[] = [];
-  const db = getSupabase();
   for (let offset = 0; ; offset += 500) {
     const { data, error } = await db.rpc("list_knowledge_documents").range(offset, offset + 499);
     if (error) databaseError(error.code);
@@ -37,14 +39,19 @@ export async function listKnowledgeDocuments(request: Request): Promise<Knowledg
 }
 
 export async function deleteKnowledgeDocument(request: Request, version: KnowledgeVersion) {
-  requireSession(request);
-  const { data, error } = await getSupabase().rpc("delete_knowledge_document", { p_id: version.id, p_created_at: version.createdAt });
+  const db = await requireSession(request);
+  // Cudzy lub nieistniejący dokument jest dla RLS niewidoczny. Sprawdzamy to przed funkcją SQL,
+  // bo ta w takim przypadku kończy się błędem 40001, a API odpowiada dopiero po limicie czasu.
+  const visible = await db.from("documents").select("id").eq("id", version.id).maybeSingle();
+  if (visible.error) databaseError(visible.error.code);
+  if (!visible.data) throw new KnowledgeError("Nie znaleziono.", 404);
+  const { data, error } = await db.rpc("delete_knowledge_document", { p_id: version.id, p_created_at: version.createdAt });
   if (error) databaseError(error.code);
   if (data !== true) throw new KnowledgeError("Dokument już nie istnieje lub jego wersja się zmieniła. Odśwież listę.", 409);
 }
 
 export async function addKnowledgeDocument(request: Request, input: unknown, progress?: (stage: ImportStage) => void) {
-  requireSession(request);
+  const db = await requireSession(request);
   const parsed = knowledgeImportSchema.safeParse(input);
   if (!parsed.success) throw new KnowledgeError(parsed.error.issues[0]?.message ?? "Nieprawidłowy dokument.", 400);
   progress?.("splitting");
@@ -58,7 +65,6 @@ export async function addKnowledgeDocument(request: Request, input: unknown, pro
   try { model = embeddingModelId(); } catch { throw new KnowledgeError("Brak konfiguracji modelu embeddingów na serwerze. Ustaw OPENROUTER_EMBEDDING_MODEL."); }
   if (!apiKey) throw new KnowledgeError("Brak konfiguracji połączenia z modelem embeddingów na serwerze.");
   const signal = AbortSignal.any([request.signal, AbortSignal.timeout(60_000)]);
-  const db = getSupabase();
   const pending: { id: string; content: string }[] = [];
   // Pobieramy wszystkie braki, również gdy jest ich więcej niż limit strony API.
   for (let offset = 0; ; offset += 500) {

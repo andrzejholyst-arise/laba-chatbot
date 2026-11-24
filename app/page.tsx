@@ -1,9 +1,8 @@
-import { cookies } from "next/headers";
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { authConfigurationError, cookieName, validSession } from "../lib/session";
+import { requirePageUser } from "../lib/auth";
 import Chat from "./chat";
-import Login from "./login";
+import { accountDisplay } from "../lib/account-display";
 import { loadDemoCases } from "../lib/demo-cases";
 
 type ChatSearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
@@ -11,18 +10,15 @@ type ChatSearchParams = Promise<{ [key: string]: string | string[] | undefined }
 async function ProtectedChat({ searchParams }: { searchParams: ChatSearchParams }) {
   // Sprawdzanie ważności sesji wymaga aktualnego czasu dla tego żądania.
   await connection();
-  const cookieStore = await cookies();
-  const error = authConfigurationError();
-  if (error || !validSession(cookieStore.get(cookieName())?.value)) {
-    return <Login configurationError={error} />;
-  }
+  const user = await requirePageUser();
+  const account = accountDisplay(user.user_metadata);
   const query = await searchParams;
   const selected = typeof query.conversation === "string" ? query.conversation : undefined;
   const startNew = query.new === "1";
   // Brak materiałów nie powinien blokować zwykłego czatu.
   const demoCases = await loadDemoCases().catch(() => []);
-  return <Chat key={startNew ? "new" : selected ?? "latest"} demoCases={demoCases}
-    initialConversationId={selected} startNew={startNew} />;
+  return <Chat key={`${user.id}:${startNew ? "new" : selected ?? "latest"}`} demoCases={demoCases}
+    userEmail={user.email ?? ""} displayName={account.name} avatarUrl={account.avatarUrl} initialConversationId={selected} startNew={startNew} />;
 }
 
 export default function Home({ searchParams }: { searchParams: ChatSearchParams }) {

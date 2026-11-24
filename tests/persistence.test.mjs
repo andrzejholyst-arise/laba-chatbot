@@ -7,18 +7,17 @@ test("Historia Supabase: prawdziwy klient i SDK, wyłącznie atrapy HTTP", async
   const app = await loadApp(t, { persistence: true });
   const { POST } = await app("app/api/agent/route.ts");
   const { GET, DELETE } = await app("app/api/conversations/route.ts");
-  const { createSession } = await app("lib/session.ts");
+  const { createTestSession } = await app("lib/auth.ts");
   const { messageText, prepareConversation, saveConversationTitle, saveConversationTurn } = await app("lib/conversation-store.ts");
   const { validConversationTitle } = await app("lib/conversation-title.ts");
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "offline-password";
-  process.env.SESSION_SECRET = "offline-session-secret-".repeat(4);
+
   process.env.OPENROUTER_API_KEY = "offline-api-key";
   process.env.OPENROUTER_MODEL = "test/model";
   process.env.SUPABASE_URL = "https://database.test";
   process.env.SUPABASE_SECRET_KEY = "offline-supabase-secret";
-  const cookie = `chat-session=${createSession()}`;
-  const otherCookie = `chat-session=${createSession()}`;
+  const cookie = `chat-session=${createTestSession()}`;
+  const otherCookie = `chat-session=${createTestSession()}`;
   const conversations = [], messages = [], writes = [], modelRequests = [], titleRequests = [];
   let externalCalls = 0, failWrites = false, failReads = false, failModel = false;
   let readError = { message: "RAW_DB_SECRET", code: "offline" }, readStatus = 503;
@@ -68,19 +67,19 @@ test("Historia Supabase: prawdziwy klient i SDK, wyłącznie atrapy HTTP", async
     assert.equal(url.hostname, "database.test", "Nieoczekiwane połączenie zewnętrzne");
     assert.equal(init.cache, "no-store");
     assert.equal(new Headers(init.headers).get("apikey"), "offline-supabase-secret");
-    if (url.pathname === "/rest/v1/rpc/delete_studio_conversation") {
-      const input = JSON.parse(init.body);
-      if (failDelete) return Response.json({ code: "offline", message: "RAW_DB_SECRET" }, { status: 503 });
-      const index = conversations.findIndex(row => row.client_id === input.p_client_id && row.session_key === input.p_session_key);
-      if (index < 0) return Response.json(false);
-      const conversation = conversations[index];
-      for (let i = messages.length - 1; i >= 0; i--) if (messages[i].conversation_id === conversation.id) messages.splice(i, 1);
-      conversations.splice(index, 1);
-      return Response.json(true);
-    }
     const table = url.pathname.split("/").at(-1);
     assert.ok(["conversations", "messages"].includes(table));
-    const rows = table === "conversations" ? conversations : messages;
+    const owner = new Headers(init.headers).get("x-test-user");
+    assert.ok(owner, "Zapytanie musi iść klientem zalogowanej osoby");
+    // Atrapa RLS: widoczne i zmienialne są tylko wiersze z user_id tej sesji.
+    const allRows = table === "conversations" ? conversations : messages;
+    const rows = allRows.filter(row => row.user_id === owner);
+    if (init.method === "DELETE") {
+      if (failDelete) return Response.json({ code: "offline", message: "RAW_DB_SECRET" }, { status: 503 });
+      const hits = rows.filter(row => [...url.searchParams].every(([key, value]) => !value.startsWith("eq.") || String(row[key]) === value.slice(3)));
+      for (const row of hits) allRows.splice(allRows.indexOf(row), 1);
+      return Response.json(table === "conversations" ? (hits[0] ? { id: hits[0].id } : null) : null);
+    }
     if (init.method === "PATCH") {
       if (failTitleWrite) return Response.json({ code: "offline", message: "RAW_DB_SECRET" }, { status: 503 });
       const row = rows.find(row => [...url.searchParams].every(([key, value]) => value === "is.null" ? row[key] === null : !value.startsWith("eq.") || String(row[key]) === value.slice(3)));
@@ -110,7 +109,9 @@ test("Historia Supabase: prawdziwy klient i SDK, wyłącznie atrapy HTTP", async
       for (const row of Array.isArray(payload) ? payload : [payload]) {
         assert.equal(Object.hasOwn(row, "id"), false, "Nie wysyłamy wartości kolumny IDENTITY");
         assert.match(row.client_id, /^[a-f0-9-]{36}$/);
-        if (!rows.some(stored => stored.client_id === row.client_id)) rows.push({ ...row,
+        assert.equal(Object.hasOwn(row, "user_id"), false, "user_id wypełnia baza, nie aplikacja");
+        assert.equal(Object.hasOwn(row, "session_key"), false);
+        if (!allRows.some(stored => stored.client_id === row.client_id)) allRows.push({ ...row, user_id: owner,
           id: String(9007199254740993n + BigInt(rows.length)),
           created_at: row.created_at ?? new Date(Date.now() + rows.length * 1000).toISOString(), position: rows.length + 1 });
       }
@@ -362,11 +363,11 @@ test("Historia Supabase: prawdziwy klient i SDK, wyłącznie atrapy HTTP", async
   await t.test("Lista stronicuje starsze rozmowy i liczy ponad 500 wiadomości bez ucinania", async () => {
     const original = conversations.find(row => row.client_id === conversationId);
     for (let index = 0; index < 51; index++) conversations.push({
-      id: String(91000000000000000n + BigInt(index)), client_id: randomUUID(), session_key: original.session_key,
+      id: String(91000000000000000n + BigInt(index)), client_id: randomUUID(), user_id: original.user_id,
       title: `Starsza rozmowa ${index}`, created_at: "2010-01-01T00:00:00.000Z",
     });
     for (let index = 0; index < 1002; index++) messages.push({
-      id: String(92000000000000000n + BigInt(index)), client_id: randomUUID(), conversation_id: original.id,
+      id: String(92000000000000000n + BigInt(index)), client_id: randomUUID(), conversation_id: original.id, user_id: original.user_id,
       role: index % 2 ? "assistant" : "user", content: "Tekst testowy", position: 10000 + index,
     });
     const first = await (await GET(get(cookie, "?list=1"))).json();
@@ -426,7 +427,7 @@ test("Historia Supabase: prawdziwy klient i SDK, wyłącznie atrapy HTTP", async
     } finally { failTitle = false; titleHttpStatus = 500; }
   });
 
-  await t.test("Usuń: sesja, origin i UUID przed RPC; cudza rozmowa oraz awaria nie usuwają danych", async () => {
+  await t.test("Usuń: sesja, origin i UUID przed zapytaniem; cudza rozmowa oraz awaria nie usuwają danych", async () => {
     const before = externalCalls;
     assert.equal((await remove(conversationId, cookie, "https://other.test")).status, 403);
     assert.equal((await remove("not-a-uuid")).status, 400);
@@ -455,10 +456,10 @@ test("Historia Supabase: prawdziwy klient i SDK, wyłącznie atrapy HTTP", async
   });
 
   await t.test("Pierwsza odpowiedź nadaje tytuł również starszej pustej rozmowie z innym tytułem lub NULL", async () => {
-    const ownerKey = conversations[0].session_key;
+    const ownerKey = conversations[0].user_id;
     for (const [index, initialTitle] of ["Stary tytuł początkowy", null].entries()) {
       const id = randomUUID();
-      conversations.push({ id: String(94000000000000000n + BigInt(index)), client_id: id, session_key: ownerKey,
+      conversations.push({ id: String(94000000000000000n + BigInt(index)), client_id: id, user_id: ownerKey,
         title: initialTitle, created_at: new Date().toISOString() });
       const output = events(await (await POST(req({ conversationId: id, messages: [user(`legacy-${index}`)] }))).text());
       assert.equal(meta(output).persisted, true);

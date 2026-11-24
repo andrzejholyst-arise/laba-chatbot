@@ -9,7 +9,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test:auth": "node --test tests/auth.test.mjs",
+    "test:auth": "node --test tests/auth.test.mjs tests/supabase-auth.test.mjs",
     "test:analysis": "node --test tests/analysis.test.mjs",
     "test:images": "node --test tests/images.test.mjs",
     "test:speech": "node --test tests/speech.test.mjs",
@@ -25,8 +25,8 @@
   "dependencies": {
     "@ai-sdk/react": "4.0.161",
     "@openrouter/ai-sdk-provider": "3.1.0",
+    "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.119.0",
-    "@vercel/firewall": "1.2.6",
     "ai": "7.0.157",
     "next": "16.4.6",
     "react": "19.3.0",

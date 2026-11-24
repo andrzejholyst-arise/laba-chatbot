@@ -64,7 +64,7 @@ export function workshopTools(request: Request, model: string, toolNames: () => 
       inputSchema: z.strictObject({}), execute: async () => ({ ok: true as const, skonfigurowanyModel: model,
         narzedzia: toolNames(), limitKrokow: getAgentStepLimit(), limitWywolanNarzedzi: AGENT_TOOL_LIMIT,
         limitZadaniaSekundy: AGENT_TASK_TIMEOUT_MS / 1000, limitNarzedziaSekundy: AGENT_TOOL_TIMEOUT_MS / 1000,
-        wymaganeZmienne: Object.fromEntries(["OPENROUTER_API_KEY", "OPENROUTER_MODEL", "CHAT_PASSWORD", "SESSION_SECRET"].map(key => [key, process.env[key]?.trim() ? "tak" : "nie"])),
+        wymaganeZmienne: Object.fromEntries(["OPENROUTER_API_KEY", "OPENROUTER_MODEL", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"].map(key => [key, process.env[key]?.trim() ? "tak" : "nie"])),
         retrievedAt: retrievedAt() }),
     }),
   };

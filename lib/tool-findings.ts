@@ -64,7 +64,7 @@ export function toolFinding(name: string, value: unknown): string | null {
       if (o.ok === true) {
         const flags = object(o.wymaganeZmienne);
         result = `Model: ${s("skonfigurowanyModel")}; limit: ${n("limitKrokow")}; narzędzia: ${Array.isArray(o.narzedzia) ? o.narzedzia.map(v => text(v, 40)).join(", ") : ""}. Konfiguracja: ` +
-          ["OPENROUTER_API_KEY", "OPENROUTER_MODEL", "CHAT_PASSWORD", "SESSION_SECRET"].map(key => `${key}: ${flags[key] === "tak" ? "tak" : "nie"}`).join(", ");
+          ["OPENROUTER_API_KEY", "OPENROUTER_MODEL", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"].map(key => `${key}: ${flags[key] === "tak" ? "tak" : "nie"}`).join(", ");
       }
       break;
     case "generujObraz": if (o.ok === true) result = "Obraz wygenerowany — plik jest w rozmowie."; break;

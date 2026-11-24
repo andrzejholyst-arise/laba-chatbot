@@ -15,6 +15,7 @@ import { visibleKnowledgeText } from "../lib/knowledge-sources";
 import SpeechResponse from "./speech-response";
 import GeneratedImage from "./generated-image";
 import { AgentLimit, AgentSteps, AgentStats } from "./agent-progress";
+import { onboardingMessage, onboardingQuestions } from "../lib/profile-rules";
 import { markInterrupted } from "../lib/interrupted-message";
 import { chatTransport } from "../lib/chat-transport";
 import { safeImageDataUrl, validatePhotoFile } from "../lib/image-files";
@@ -33,8 +34,19 @@ function setConversationAddress(id?: string) {
   window.history.replaceState(null, "", `${url.pathname}${url.search}`);
 }
 
-export default function Chat({ demoCases, initialConversationId, startNew = false }: {
-  demoCases: DemoCase[]; initialConversationId?: string; startNew?: boolean;
+// Avatar z konta albo, gdy go brak lub się nie wczytał, kółko z pierwszą literą imienia.
+function AccountAvatar({ url, label }: { url: string | null; label: string }) {
+  const [failed, setFailed] = useState(false);
+  if (url && !failed) {
+    // Zwykły znacznik img: adres pochodzi z konta Google, więc nie przechodzi przez optymalizator obrazów.
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img className={styles.avatar} src={url} alt="" width={28} height={28} referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
+  }
+  return <span className={styles.avatarFallback} aria-hidden="true">{[...label.trim()][0]?.toLocaleUpperCase("pl") ?? "?"}</span>;
+}
+
+export default function Chat({ demoCases, initialConversationId, startNew = false, userEmail, displayName = null, avatarUrl = null }: {
+  userEmail: string; displayName?: string | null; avatarUrl?: string | null; demoCases: DemoCase[]; initialConversationId?: string; startNew?: boolean;
 }) {
   const { messages, setMessages, sendMessage, status, error, clearError, stop } = useChat<ChatMessage>({
     transport: chatTransport,
@@ -47,10 +59,12 @@ export default function Chat({ demoCases, initialConversationId, startNew = fals
   const [historyError, setHistoryError] = useState("");
   const [greetingName, setGreetingName] = useState<string | null>(null);
   const [greetingReady, setGreetingReady] = useState(false);
+  const [firstVisit, setFirstVisit] = useState(false);
   const [greetingError, setGreetingError] = useState("");
   const greetingRequest = useRef(0);
   const [input, setInput] = useState("");
   const [leaving, setLeaving] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
   const [mode, setMode] = useState<"chat" | "analysis" | "demo">("chat");
   const conversation = useRef<HTMLElement>(null);
@@ -73,13 +87,18 @@ export default function Chat({ demoCases, initialConversationId, startNew = fals
 
   async function loadGreeting(signal?: AbortSignal) {
     const version = ++greetingRequest.current;
-    setGreetingReady(false); setGreetingError(""); setGreetingName(null);
+    setGreetingReady(false); setGreetingError(""); setGreetingName(null); setFirstVisit(false);
     try {
       const response = await fetch("/api/profile", { cache: "no-store", signal });
-      if (response.status === 401) { window.location.replace("/"); return; }
+      if (response.status === 401) { window.location.replace("/login"); return; }
       const body = await response.json();
       if (!response.ok) throw new Error("Nie udało się wczytać powitania z profilu.");
-      if (!signal?.aborted && version === greetingRequest.current) { setGreetingName(body.name); setGreetingReady(true); }
+      if (!signal?.aborted && version === greetingRequest.current) {
+        setGreetingName(body.name);
+        // Pusty profil (bez imienia i preferencji) oznacza pierwsze wejście tej osoby.
+        setFirstVisit(!body.name && Object.keys(body.preferences ?? {}).length === 0);
+        setGreetingReady(true);
+      }
     } catch {
       if (!signal?.aborted && version === greetingRequest.current) setGreetingError("Nie udało się wczytać powitania z profilu.");
     }
@@ -91,7 +110,7 @@ export default function Chat({ demoCases, initialConversationId, startNew = fals
     try {
       const endpoint = initialConversationId ? `/api/conversations?id=${encodeURIComponent(initialConversationId)}` : "/api/conversations";
       const response = await fetch(endpoint, { cache: "no-store", signal });
-      if (response.status === 401) { window.location.replace("/"); return; }
+      if (response.status === 401) { window.location.replace("/login"); return; }
       const body = await response.json();
       if (!response.ok) throw new Error(body.error?.message || "Nie udało się wczytać rozmowy.");
       if (signal?.aborted) return;
@@ -199,6 +218,10 @@ export default function Chat({ demoCases, initialConversationId, startNew = fals
         <div className={styles.brand}>
           <span className={styles.brandMark} aria-hidden="true">N<span>🍌</span></span>
           <div><p className={styles.eyebrow}>TWÓJ ASYSTENT</p><h1>Studio Nova</h1>
+            {!signedOut && <p className={`${styles.subtitle} ${styles.account}`}>
+              <AccountAvatar url={avatarUrl} label={displayName ?? userEmail} />
+              <span title={userEmail}>{displayName ?? userEmail}</span>
+            </p>}
             <p className={styles.subtitle}>Przestrzeń na dobre odpowiedzi i nowe pomysły.</p></div>
         </div>
       <div className={styles.controls}>
@@ -215,12 +238,15 @@ export default function Chat({ demoCases, initialConversationId, startNew = fals
           try {
             const response = await fetch("/api/logout", { method: "POST" });
             if (!response.ok) throw new Error("logout");
-            window.location.replace("/");
+            // Czyścimy ekran, zanim przeglądarka przejdzie dalej.
+            setMessages([]); setInput(""); setPhoto(undefined); setGreetingName(null); setGreetingReady(false); setSignedOut(true);
+            conversationId.current = null;
+            window.location.replace("/login");
           } catch {
             setLogoutError("Nie udało się wyjść. Spróbuj ponownie.");
             setLeaving(false);
           }
-        }}>Wyjdź</button>
+        }}>Wyloguj</button>
       </div>
       </header>
       {logoutError && <p className={styles.error} role="alert">{logoutError}</p>}
@@ -249,7 +275,11 @@ export default function Chat({ demoCases, initialConversationId, startNew = fals
           <span className={styles.emptyIcon} aria-hidden="true">🐒</span>
           <p className={styles.eyebrow}>STUDIO NOVA</p>
           <h2>{greetingReady ? greetingName ? `Dzień dobry, ${greetingName}!` : "Dzień dobry!" : "Od czego zaczniemy?"}</h2>
-          {greetingReady && !greetingName && <p>Jak mam się do Ciebie zwracać?</p>}
+          {greetingReady && firstVisit && <>
+            <p>{onboardingMessage.split(` ${onboardingQuestions.name}`)[0].replace(/^Dzień dobry!\s*/, "")}</p>
+            <p><strong>{onboardingQuestions.name}</strong><br /><strong>{onboardingQuestions.color}</strong></p>
+          </>}
+          {greetingReady && !greetingName && !firstVisit && <p>Jak mam się do Ciebie zwracać?</p>}
           {!greetingReady && !greetingError && <p role="status">Przygotowuję powitanie…</p>}
           {greetingError && <p role="alert">{greetingError} <button type="button" onClick={() => void loadGreeting()}>Spróbuj ponownie</button></p>}
           <p>Przygotuj szkic odpowiedzi dla klienta, zadaj pytanie lub stwórz obraz. Możesz też dodać zdjęcie.</p>

@@ -1,8 +1,9 @@
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
-import { getSupabase } from "./supabase";
-import { sessionFromRequest, validSession } from "./session";
+import { userDb } from "./user-db";
+import { verifiedUser } from "./auth";
+
 import type { ConversationHistory } from "./conversation-history";
 import { cleanKnowledgeContext, knowledgeSourcesForMessage } from "./knowledge-sources";
 
@@ -21,9 +22,9 @@ function databaseError(error: { code?: string; message?: string }, status: numbe
   if (["42P01", "PGRST205"].includes(code)) help = "Brakuje tabeli conversations lub messages w API. Wykonaj przygotowany skrypt SQL w projekcie wskazanym przez SUPABASE_URL.";
   else if (["42703", "PGRST204"].includes(code)) help = error.message?.includes("knowledge_context")
     ? "Brakuje kolumny źródeł. Wykonaj supabase/knowledge-message-sources.sql w SQL Editor i odśwież stronę."
-    : "Brakuje wymaganej kolumny albo API nie odświeżyło schematu. Sprawdź client_id, session_key, created_at i position oraz wykonanie przygotowanego skryptu SQL.";
-  else if (["42501", "DB_PERMISSION"].includes(code)) help = "Brak uprawnień do tabel. Sprawdź uprawnienia service_role ze skryptu SQL oraz użycie serwerowego SUPABASE_SECRET_KEY.";
-  else if (["PGRST301", "PGRST302", "PGRST303", "DB_AUTH"].includes(code)) help = "Supabase odrzucił klucz. Sprawdź, czy SUPABASE_URL i serwerowy SUPABASE_SECRET_KEY pochodzą z tego samego projektu, i uruchom ponownie serwer.";
+    : "Brakuje wymaganej kolumny albo API nie odświeżyło schematu. Sprawdź client_id, user_id, created_at i position oraz wykonanie przygotowanego skryptu SQL.";
+  else if (["42501", "DB_PERMISSION"].includes(code)) help = "Brak uprawnień do tabel. Sprawdź polityki RLS i uprawnienia roli authenticated dla tabel conversations i messages.";
+  else if (["PGRST301", "PGRST302", "PGRST303", "DB_AUTH"].includes(code)) help = "Supabase odrzucił klucz. Sprawdź, czy NEXT_PUBLIC_SUPABASE_URL i klucz publishable pochodzą z tego samego projektu, i uruchom ponownie serwer.";
   else if (code === "DB_CONNECTION") help = "Brak połączenia z Supabase lub przekroczony czas oczekiwania. Sprawdź SUPABASE_URL, sieć i czy projekt Supabase jest aktywny.";
   else if (code === "23502") {
     const column = typeof error.message === "string" ? /null value in column "([A-Za-z_][A-Za-z0-9_]{0,62})"/.exec(error.message)?.[1] : undefined;
@@ -36,10 +37,11 @@ function databaseError(error: { code?: string; message?: string }, status: numbe
   return new ConversationError(`${action} [${code}]. ${help}`, 503, code);
 }
 
-function sessionKey(request: Request) {
-  const token = sessionFromRequest(request);
-  if (!validSession(token)) throw new ConversationError("Sesja wygasła. Zaloguj się ponownie.", 401);
-  return createHash("sha256").update(token!).digest("hex");
+// Tożsamość ustala wyłącznie serwer z sesji. Właściciela wierszy pilnuje RLS w bazie,
+// a user_id wypełnia baza; nie przyjmujemy go od przeglądarki ani od modelu.
+async function ownerDb(request: Request) {
+  if (!await verifiedUser(request)) throw new ConversationError("Sesja wygasła. Zaloguj się ponownie.", 401);
+  return userDb(request);
 }
 
 // Stałe UUID dla obu wiadomości danej tury, również przy ponowieniu żądania.
@@ -67,8 +69,8 @@ function uiMessage(row: StoredMessage): UIMessage {
   return { id: row.client_id, role: row.role, parts: [{ type: "text", text: row.content }], ...(row.role === "assistant" && context.searched ? { metadata: { knowledgeSearched: true, knowledgeSources: context.sources } } : {}) };
 }
 
-async function readMessages(conversationId: string) {
-  const db = getSupabase();
+type Db = Awaited<ReturnType<typeof ownerDb>>;
+async function readMessages(db: Db, conversationId: string) {
   const rows: StoredMessage[] = [];
   for (let offset = 0; ; offset += 500) {
     const { data, error, status } = await db.from("messages").select("client_id,role,content,knowledge_context")
@@ -80,29 +82,28 @@ async function readMessages(conversationId: string) {
 }
 
 export async function loadLatestConversation(request: Request) {
-  const key = sessionKey(request);
+  const db = await ownerDb(request);
   // Rzutowanie w bazie zapobiega zaokrąglaniu bigint przez JSON/JavaScript.
-  const { data, error, status } = await getSupabase().from("conversations").select("id::text,client_id")
-    .eq("session_key", key).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(1).maybeSingle();
+  const { data, error, status } = await db.from("conversations").select("id::text,client_id")
+    .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(1).maybeSingle();
   if (error) throw databaseError(error, status, "Nie udało się wczytać ostatniej rozmowy");
-  return { conversationId: data?.client_id ?? null, messages: data ? await readMessages(data.id) : [] };
+  return { conversationId: data?.client_id ?? null, messages: data ? await readMessages(db, data.id) : [] };
 }
 
 export async function loadConversation(request: Request, conversationId: string) {
-  const key = sessionKey(request);
-  const { data, error, status } = await getSupabase().from("conversations").select("id::text,client_id")
-    .eq("client_id", conversationId).eq("session_key", key).maybeSingle();
+  const db = await ownerDb(request);
+  const { data, error, status } = await db.from("conversations").select("id::text,client_id")
+    .eq("client_id", conversationId).maybeSingle();
   if (error) throw databaseError(error, status, "Nie udało się wczytać wybranej rozmowy");
-  if (!data) throw new ConversationError("Rozmowa nie jest dostępna w tej sesji.", 404);
-  return { conversationId: data.client_id, messages: await readMessages(data.id) };
+  if (!data) throw new ConversationError("Nie znaleziono.", 404);
+  return { conversationId: data.client_id, messages: await readMessages(db, data.id) };
 }
 
 export async function listConversations(request: Request, offset = 0): Promise<ConversationHistory> {
-  const key = sessionKey(request);
-  const db = getSupabase();
+  const db = await ownerDb(request);
   const pageSize = 50;
   const { data, error, status } = await db.from("conversations").select("id::text,client_id,title,created_at")
-    .eq("session_key", key).order("created_at", { ascending: false }).order("id", { ascending: false })
+    .order("created_at", { ascending: false }).order("id", { ascending: false })
     .range(offset, offset + pageSize - 1);
   if (error) throw databaseError(error, status, "Nie udało się wczytać listy rozmów");
   const counts = new Map<string, number>();
@@ -132,33 +133,31 @@ export type ConversationTurn = {
 };
 
 export async function prepareConversation(request: Request, messages: UIMessage[], id?: string): Promise<ConversationTurn> {
-  const key = sessionKey(request);
   const conversationId = id ?? randomUUID();
   const user = messages.at(-1)!;
   if (!user.id || user.id.length > 200) throw new ConversationError("Nieprawidłowy identyfikator wiadomości.", 400);
-  const db = getSupabase();
+  const db = await ownerDb(request);
   const { error: insertError, status: insertStatus } = await db.from("conversations").upsert({
-    client_id: conversationId, created_at: new Date().toISOString(), session_key: key,
+    client_id: conversationId, created_at: new Date().toISOString(),
     title: "Nowa rozmowa Studio Nova",
   }, { onConflict: "client_id", ignoreDuplicates: true });
   if (insertError) throw databaseError(insertError, insertStatus, "Nie udało się otworzyć rozmowy");
-  const { data: owned, error, status } = await db.from("conversations").select("id::text,title").eq("client_id", conversationId).eq("session_key", key).maybeSingle();
+  const { data: owned, error, status } = await db.from("conversations").select("id::text,title").eq("client_id", conversationId).maybeSingle();
   if (error) throw databaseError(error, status, "Nie udało się sprawdzić dostępu do rozmowy");
-  if (!owned) throw new ConversationError("Rozmowa nie jest dostępna w tej sesji.", 404);
-  const history = await readMessages(owned.id);
+  if (!owned) throw new ConversationError("Nie znaleziono.", 404);
+  const history = await readMessages(db, owned.id);
   const assistantId = messageId(conversationId, user.id, "assistant");
   return { conversationId, user, assistantId, messages: [...history, user], replay: history.find(message => message.id === assistantId), isFirstResponse: history.length === 0, initialTitle: typeof owned.title === "string" ? owned.title : null };
 }
 
 export async function saveConversationTitle(request: Request, turn: ConversationTurn, title: string) {
-  const key = sessionKey(request);
-  const db = getSupabase();
-  let query = db.from("conversations").update({ title }).eq("client_id", turn.conversationId).eq("session_key", key);
+  const db = await ownerDb(request);
+  let query = db.from("conversations").update({ title }).eq("client_id", turn.conversationId);
   query = turn.initialTitle === null ? query.is("title", null) : query.eq("title", turn.initialTitle);
   const { data, error, status } = await query.select("client_id").maybeSingle();
   if (error) throw databaseError(error, status, "Nie udało się zapisać tytułu rozmowy");
   if (!data) {
-    const current = await db.from("conversations").select("id::text,title").eq("client_id", turn.conversationId).eq("session_key", key).maybeSingle();
+    const current = await db.from("conversations").select("id::text,title").eq("client_id", turn.conversationId).maybeSingle();
     if (current.error) throw databaseError(current.error, current.status, "Nie udało się sprawdzić tytułu rozmowy");
     if (current.data?.title && current.data.title !== turn.initialTitle) return;
     throw new ConversationError("[TITLE_SAVE] Rozmowa została usunięta lub jej tytuł nie jest już dostępny.", 409);
@@ -166,20 +165,24 @@ export async function saveConversationTitle(request: Request, turn: Conversation
 }
 
 export async function deleteConversation(request: Request, conversationId: string) {
-  const key = sessionKey(request);
-  const { data, error, status } = await getSupabase().rpc("delete_studio_conversation", {
-    p_client_id: conversationId, p_session_key: key,
-  });
+  const db = await ownerDb(request);
+  // Funkcja SQL z kluczem secret nie jest dostępna dla zalogowanych, więc usuwamy
+  // wiadomości i rozmowę zwykłymi zapytaniami. RLS pozwala tylko na własne wiersze.
+  const { data: owned, error, status } = await db.from("conversations").select("id::text").eq("client_id", conversationId).maybeSingle();
   if (error) throw databaseError(error, status, "Nie udało się usunąć rozmowy");
-  if (data !== true) throw new ConversationError("Rozmowa nie jest dostępna w tej sesji.", 404);
+  if (!owned) throw new ConversationError("Nie znaleziono.", 404);
+  const removedMessages = await db.from("messages").delete().eq("conversation_id", owned.id);
+  if (removedMessages.error) throw databaseError(removedMessages.error, removedMessages.status, "Nie udało się usunąć rozmowy");
+  const removed = await db.from("conversations").delete().eq("id", owned.id).select("id").maybeSingle();
+  if (removed.error) throw databaseError(removed.error, removed.status, "Nie udało się usunąć rozmowy");
+  if (!removed.data) throw new ConversationError("Nie znaleziono.", 404);
 }
 
 export async function saveConversationTurn(request: Request, turn: ConversationTurn, assistant: UIMessage) {
-  const key = sessionKey(request);
-  const db = getSupabase();
-  const { data, error, status } = await db.from("conversations").select("id::text").eq("client_id", turn.conversationId).eq("session_key", key).maybeSingle();
+  const db = await ownerDb(request);
+  const { data, error, status } = await db.from("conversations").select("id::text").eq("client_id", turn.conversationId).maybeSingle();
   if (error) throw databaseError(error, status, "Nie udało się potwierdzić dostępu do zapisu");
-  if (!data) throw new ConversationError("Nie udało się potwierdzić dostępu do zapisu rozmowy.");
+  if (!data) throw new ConversationError("Nie znaleziono.", 404);
   const createdAt = new Date().toISOString();
   const metadata = assistant.metadata && typeof assistant.metadata === "object" ? assistant.metadata as Record<string, unknown> : {};
   const knowledge = { searched: metadata.knowledgeSearched === true, sources: knowledgeSourcesForMessage(assistant) };

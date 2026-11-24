@@ -1,6 +1,7 @@
 import { TaskBudget } from "../../../lib/task-budget";
 import { z } from "zod";
-import { sameOrigin, sessionFromRequest, validSession } from "../../../lib/session";
+import { verifiedUser } from "../../../lib/auth";
+import { sameOrigin } from "../../../lib/request-origin";
 import { ImageUploadError, readChatBody } from "../../../lib/chat-upload";
 import { analysisRequestSchema } from "../../../lib/analysis";
 import { analyzeMessage, analysisError } from "../../../lib/analyze-message";
@@ -26,7 +27,7 @@ export async function POST(request: Request) {
   let budget: TaskBudget | undefined;
   const fail = (code: string, message: string, status: number) => { budget?.dispose(); return Response.json({ error: { code, message } }, { status, headers }); };
   // Pierwsza operacja: sesja. Bez niej nie czytamy body ani nie wywołujemy dostawcy.
-  if (!validSession(sessionFromRequest(request))) return fail("unauthorized", "Sesja wygasła. Zaloguj się ponownie.", 401);
+  if (!(await verifiedUser(request))) return fail("unauthorized", "Sesja wygasła. Zaloguj się ponownie.", 401);
   if (!sameOrigin(request)) return fail("forbidden", "Niedozwolone źródło żądania.", 403);
   budget = new TaskBudget(request.signal);
   let body;

@@ -5,16 +5,15 @@ import { loadApp } from "./app-fixture.mjs";
 test("Dashboard podróży — lokalne źródła i atrapa modelu", async t => {
   const app = await loadApp(t);
   const { POST } = await app("app/api/dashboard/route.ts");
-  const { createSession } = await app("lib/session.ts");
+  const { createTestSession } = await app("lib/auth.ts");
   const { timeDifferenceMinutes, twoSentences } = await app("lib/travel-dashboard.ts");
   const { countryCurrencies } = await app("lib/country-currency.ts");
   const { dashboardResponseSchema } = await app("lib/dashboard-schema.ts");
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "offline-only";
-  process.env.SESSION_SECRET = "offline-secret-".repeat(4);
+
   process.env.OPENROUTER_API_KEY = "offline-only-key";
   process.env.OPENROUTER_MODEL = "test/model";
-  const cookie = `chat-session=${createSession()}`;
+  const cookie = `chat-session=${createTestSession()}`;
   const today = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Paris" }).format(new Date());
   const year = Number(today.slice(0, 4));
   const query = { miasto: "Paryż", data: today };

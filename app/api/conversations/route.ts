@@ -1,5 +1,6 @@
 import { loadLatestConversation, loadConversation, listConversations, deleteConversation, ConversationError } from "../../../lib/conversation-store";
-import { sessionFromRequest, validSession, sameOrigin } from "../../../lib/session";
+import { verifiedUser } from "../../../lib/auth";
+import { sameOrigin } from "../../../lib/request-origin";
 import { z } from "zod";
 
 const querySchema = z.strictObject({
@@ -10,7 +11,7 @@ const querySchema = z.strictObject({
 
 export async function GET(request: Request) {
   const headers = { "Cache-Control": "no-store" };
-  if (!validSession(sessionFromRequest(request))) {
+  if (!(await verifiedUser(request))) {
     return Response.json({ error: { message: "Sesja wygasła. Zaloguj się ponownie." } }, { status: 401, headers });
   }
   const query = querySchema.safeParse(Object.fromEntries(new URL(request.url).searchParams));
@@ -22,7 +23,7 @@ export async function GET(request: Request) {
   } catch (error) {
     return Response.json({ error: {
       code: error instanceof ConversationError ? error.code : "SUPABASE_CONFIG",
-      message: error instanceof ConversationError ? error.message : "Nie udało się wczytać rozmowy. Sprawdź SUPABASE_URL i SUPABASE_SECRET_KEY na serwerze oraz uruchom go ponownie.",
+      message: error instanceof ConversationError ? error.message : "Nie udało się wczytać rozmowy. Sprawdź konfigurację Supabase i uruchom go ponownie.",
     } },
       { status: error instanceof ConversationError ? error.status : 503, headers });
   }
@@ -30,7 +31,7 @@ export async function GET(request: Request) {
 
 export async function DELETE(request: Request) {
   const headers = { "Cache-Control": "no-store" };
-  if (!validSession(sessionFromRequest(request))) {
+  if (!(await verifiedUser(request))) {
     return Response.json({ error: { message: "Sesja wygasła. Zaloguj się ponownie." } }, { status: 401, headers });
   }
   if (!sameOrigin(request)) return Response.json({ error: { message: "Niedozwolone źródło żądania." } }, { status: 403, headers });

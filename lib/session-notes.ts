@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { failure, retrievedAt } from "./public-api";
-import { sessionFromRequest, validSession } from "./session";
+import { verifiedUser } from "./auth";
 
 // Jeden obiekt na poziomie głównym jest czytelniejszym kontraktem function calling.
 // Zależność treści od operacji nadal sprawdzamy po stronie serwera.
@@ -26,21 +26,20 @@ const stores = new Map<string, { expiresAt: number; notes: Note[] }>();
 const warning = "Notatki są tylko w pamięci tej instancji serwera, w bieżącej sesji. Znikną po restarcie lub wygaśnięciu sesji; inne instancje Vercel mogą ich nie widzieć.";
 
 export function sessionNotes(request: Request) {
-  // Zakres pochodzi wyłącznie ze zweryfikowanego cookie; model go nie wybiera.
-  const token = sessionFromRequest(request);
-  const scope = token ? createHash("sha256").update(token).digest("hex") : "";
-  return (input: z.input<typeof notesInputSchema>) => {
+  // Zakres wybiera serwer po sprawdzeniu konta; model nie przekazuje identyfikatora.
+  return async (input: z.input<typeof notesInputSchema>) => {
     const parsed = notesInputSchema.safeParse(input);
     if (!parsed.success) return failure("Aby zapisać notatkę, podaj operacja=zapisz i treść od 1 do 1000 znaków. Aby odczytać, podaj tylko operacja=pokaz.");
-    if (!token || !validSession(token)) return failure("Sesja wygasła. Zaloguj się ponownie, aby użyć notatek.");
+    const user = await verifiedUser(request);
+    if (!user) return failure("Sesja wygasła. Zaloguj się ponownie, aby użyć notatek.");
+    const scope = createHash("sha256").update(user.id).digest("hex");
     const now = Date.now();
     for (const [key, bucket] of stores) if (bucket.expiresAt <= now) stores.delete(key);
     let bucket = stores.get(scope);
     if (parsed.data.operacja === "pokaz") return { ok: true as const, notatki: bucket?.notes.map(note => ({ ...note })) ?? [], uwaga: warning, retrievedAt: retrievedAt() };
     if (!bucket) {
       if (stores.size >= 1000) return failure("Pamięć notatek jest pełna. Spróbuj ponownie po wygaśnięciu starszych sesji.");
-      const payload = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString());
-      bucket = { expiresAt: payload.exp * 1000, notes: [] }; stores.set(scope, bucket);
+      bucket = { expiresAt: now + 4 * 60 * 60 * 1000, notes: [] }; stores.set(scope, bucket);
     }
     if (bucket.notes.length >= 50) return failure("Osiągnięto limit 50 notatek w sesji. Nie zapisano nowej notatki.");
     const notatka = { id: bucket.notes.length + 1, tresc: parsed.data.tresc!, zapisano: retrievedAt() };

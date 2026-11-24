@@ -6,17 +6,16 @@ test("ReAct: skonfigurowany limit i podsumowanie bez dodatkowej generacji", asyn
   const app = await loadApp(t);
   const { AGENT_STEP_LIMIT } = await app("lib/tool-catalog.ts");
   const { POST } = await app("app/api/agent/route.ts");
-  const { createSession } = await app("lib/session.ts");
+  const { createTestSession } = await app("lib/auth.ts");
   const { chatToolSteps } = await app("lib/used-chat-tools.ts");
   const { toolFinding } = await app("lib/tool-findings.ts");
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "offline-password";
-  process.env.SESSION_SECRET = "offline-session-secret-".repeat(4);
+
   process.env.OPENROUTER_API_KEY = "offline-api-key";
   process.env.OPENROUTER_MODEL = "test/model";
   t.mock.method(globalThis, "fetch", async () => { throw new Error("Sieć wyłączona w testach"); });
   const req = () => new Request("http://localhost/api/agent", { method: "POST", headers: {
-    Host: "localhost", Origin: "http://localhost", Cookie: `chat-session=${createSession()}`, "Content-Type": "application/json",
+    Host: "localhost", Origin: "http://localhost", Cookie: `chat-session=${createTestSession()}`, "Content-Type": "application/json",
   }, body: JSON.stringify({ mode: "chat", messages: [{ id: "q", role: "user", parts: [{ type: "text", text: "Wykonaj zadanie w kilku krokach." }] }] }) });
   const events = stream => stream.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
   const response = chunks => new Response(chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "Content-Type": "text/event-stream" } });
@@ -160,7 +159,7 @@ test("ReAct: skonfigurowany limit i podsumowanie bez dodatkowej generacji", asyn
   await t.test("Podsumowanie nie zawiera plików, nieznanych pól i wartości sekretów", () => {
     assert.equal(toolFinding("generujObraz", { ok: true, dataUrl: "data:image/png;base64,SECRET" }).includes("base64"), false);
     assert.equal(toolFinding("odpowiedzPoPolsku", { ok: true, audioUrl: "data:audio/mpeg;base64,SECRET" }).includes("base64"), false);
-    const finding = toolFinding("diagnostyka", { ok: true, skonfigurowanyModel: "test/model", limitKrokow: 6, narzedzia: ["czas"], wymaganeZmienne: { OPENROUTER_API_KEY: "RAW_SECRET_VALUE", SESSION_SECRET: "tak" }, extra: "RAW_SECRET_VALUE" });
+    const finding = toolFinding("diagnostyka", { ok: true, skonfigurowanyModel: "test/model", limitKrokow: 6, narzedzia: ["czas"], wymaganeZmienne: { OPENROUTER_API_KEY: "RAW_SECRET_VALUE", NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "tak" }, extra: "RAW_SECRET_VALUE" });
     assert.ok(!finding.includes("RAW_SECRET_VALUE"));
     assert.ok(toolFinding("pogoda", { ok: false, message: "Brak prognozy." }).startsWith("Błąd"));
     assert.equal(toolFinding("unknown", { secret: "RAW_SECRET_VALUE" }), null);

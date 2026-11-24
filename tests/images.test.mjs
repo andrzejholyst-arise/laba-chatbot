@@ -5,7 +5,7 @@ import sharp from "sharp";
 
 test("Zdjęcia i generowanie — lokalna atrapa, bez .env i wywołań modeli", async (t) => {
   const app = await loadApp(t);
-  const paths = {"session": "lib/session.ts", "agent": "app/api/agent/route.ts", "transport": "lib/chat-transport.ts", "imageFiles": "lib/image-files.ts", "style": "lib/studio-nova-image.ts", "imageTool": "lib/generate-studio-image.ts"};
+  const paths = {"session": "lib/auth.ts", "agent": "app/api/agent/route.ts", "transport": "lib/chat-transport.ts", "imageFiles": "lib/image-files.ts", "style": "lib/studio-nova-image.ts", "imageTool": "lib/generate-studio-image.ts"};
   const load = (name) => app(paths[name]);
   const session = await load("session");
   const chat = await load("agent");
@@ -13,11 +13,10 @@ test("Zdjęcia i generowanie — lokalna atrapa, bez .env i wywołań modeli", a
   const { MAX_IMAGE_BYTES } = await load("imageFiles");
   const { validatePhotoFile } = await load("imageFiles");
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "test-images-only";
-  process.env.SESSION_SECRET = "test-image-secret-".repeat(4);
+
   process.env.OPENROUTER_API_KEY = "offline-images-only";
   process.env.OPENROUTER_MODEL = "configured/vision-model";
-  const cookie = `chat-session=${session.createSession()}`;
+  const cookie = `chat-session=${session.createTestSession()}`;
   // Mały prostokątny PNG jako lokalny fixture, bez wywołania modelu.
   const png = (await sharp({ create: { width: 120, height: 60, channels: 3, background: "#0088ff" } }).png().toBuffer()).toString("base64");
   const file = { type: "file", mediaType: "image/png", url: `data:image/png;base64,${png}`, filename: "zdjecie.png" };

@@ -2,9 +2,10 @@ import "server-only";
 import { embed, tool } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { z } from "zod";
-import { getSupabase } from "./supabase";
+import { userDb } from "./user-db";
 import { embeddingModelId, EMBEDDING_DIMENSIONS } from "./model";
-import { sessionFromRequest, validSession } from "./session";
+import { verifiedUser } from "./auth";
+
 import { failure, retrievedAt } from "./public-api";
 import { createHash } from "node:crypto";
 import { KNOWLEDGE_SIMILARITY_THRESHOLD } from "./knowledge-sources";
@@ -13,7 +14,7 @@ export const knowledgeSearchSchema = z.strictObject({ question: z.string().trim(
 const fragmentsSchema = z.array(z.object({ title: z.string().min(1).max(200), content: z.string().min(1).max(20_000), similarity: z.number().finite().min(-1.00001).max(1.00001) })).max(3);
 
 export async function searchKnowledge(request: Request, input: unknown, abortSignal?: AbortSignal) {
-  if (!validSession(sessionFromRequest(request))) return failure("Sesja wygasła. Zaloguj się ponownie.");
+  if (!(await verifiedUser(request))) return failure("Sesja wygasła. Zaloguj się ponownie.");
   const parsed = knowledgeSearchSchema.safeParse(input);
   if (!parsed.success) return failure("Podaj pytanie do bazy wiedzy, maksymalnie 2000 znaków.");
   const signal = AbortSignal.any([request.signal, AbortSignal.timeout(10_000), ...(abortSignal ? [abortSignal] : [])]);
@@ -29,7 +30,8 @@ export async function searchKnowledge(request: Request, input: unknown, abortSig
   } catch { return failure("Nie udało się utworzyć embeddingu pytania. Nie potwierdzono wyniku wyszukiwania w bazie wiedzy."); }
   try {
     signal.throwIfAborted();
-    const { data, error } = await getSupabase().rpc("match_chunks", { query_embedding: embedding, match_count: 3 }).select("title,content,similarity").limit(3).abortSignal(signal);
+    const db = await userDb(request);
+    const { data, error } = await db.rpc("match_chunks", { query_embedding: embedding, match_count: 3 }).select("title,content,similarity").limit(3).abortSignal(signal);
     if (error) return failure("Nie udało się przeszukać bazy wiedzy. Sprawdź konfigurację funkcji match_chunks.");
     const parsed = fragmentsSchema.safeParse(data);
     if (!parsed.success) return failure("Baza wiedzy zwróciła nieprawidłowy wynik wyszukiwania. Nie potwierdzono fragmentów.");

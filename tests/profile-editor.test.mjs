@@ -5,13 +5,12 @@ import { loadApp } from "./app-fixture.mjs";
 test("Edytor profilu — prawdziwy klient Supabase z atrapą HTTP", async t => {
   const app = await loadApp(t, { profile: true });
   const { GET, PATCH, DELETE } = await app("app/api/profile/route.ts");
-  const { createSession } = await app("lib/session.ts");
+  const { createTestSession } = await app("lib/auth.ts");
   process.env.NODE_ENV = "test";
-  process.env.CHAT_PASSWORD = "editor-test-only-password";
-  process.env.SESSION_SECRET = "editor-test-only-secret-".repeat(4);
+
   process.env.SUPABASE_URL = "https://editor.test";
   process.env.SUPABASE_SECRET_KEY = "editor-test-only-key";
-  const cookie = `chat-session=${createSession()}`;
+  const cookie = `chat-session=${createTestSession()}`;
   const id = "9007199254740999";
   let row = { id, name: "Andrzej", preferences: { miasto: "Łódź", response_detail: "krotko", ulubione_jedzenie: "żurek", hobby: "czytanie" } };
   let calls = 0, updates = 0, inserts = 0, conflict = false, fail = false;
@@ -25,12 +24,15 @@ test("Edytor profilu — prawdziwy klient Supabase z atrapą HTTP", async t => {
     assert.equal(url.hostname, "editor.test");
     assert.equal(init.cache, "no-store");
     if (fail) return Response.json({ code: "42501", message: "PRIVATE_DATABASE_MESSAGE" }, { status: 403 });
-    if (url.pathname === "/rest/v1/rpc/save_studio_profile") {
+    assert.ok(new Headers(init.headers).get("x-test-user"), "Profil zmieniamy klientem zalogowanej osoby");
+    if (init.method === "POST") {
+      // Pierwszy zapis tworzy wiersz zwykłym INSERT (RLS); user_id wypełnia baza.
       inserts++;
       const body = JSON.parse(init.body);
       assert.equal(row, null);
-      row = { id, name: body.p_name, preferences: body.p_preferences };
-      return Response.json([{ name: row.name, preferences: row.preferences }]);
+      assert.equal(Object.hasOwn(body, "user_id"), false);
+      row = { id, name: body.name, preferences: body.preferences };
+      return Response.json([{ name: row.name, preferences: row.preferences }], { status: 201 });
     }
     assert.equal(url.pathname, "/rest/v1/user_profiles");
     if (init.method === "GET") {
