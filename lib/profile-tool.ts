@@ -22,6 +22,7 @@ export function profileTool(request: Request, latestUserText: string, previousAs
         await saveUserProfile(request, patch, abortSignal);
         return { ok: true as const, zapamietano: { ...(patch.name ? { name: patch.name } : {}), preferences: patch.preferences }, retrievedAt: retrievedAt() };
       } catch (error) {
+        console.error("zapiszProfil failed", error instanceof ProfileError ? { code: error.code, message: error.message } : error instanceof Error ? error.name : "unknown");
         return failure(error instanceof ProfileError ? error.message : "Nie udało się zapisać profilu. Nie potwierdzono zapamiętania faktów.");
       }
     },
